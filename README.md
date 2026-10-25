@@ -45,10 +45,17 @@ On the web, serve `dist/Carry.woff2` and keep the rules switched on:
 | `128+256=` | `128+256=384` |
 | `5-7=` | `5-7=-2` |
 | `12×34=` | `12×34=408` |
+| `128 + 256 =` | `128 + 256 =384` |
+| `-5--7=` | `-5--7=2` |
+| `5×-7=` | `5×-7=-35` |
 | `12+3=15` | nothing extra, because the answer is already there |
 | `x2+3=` | nothing extra, because `x2` is a name, not a number |
 
-When Carry can't be sure of an answer, it draws nothing rather than a wrong one. It doesn't divide, and it doesn't read decimals or spaces inside an expression.
+Operands accept one unary `+`, `-`, or `−`. Spaces are allowed around operators, before `=`, and after a unary sign. Spaces between digits do not join them into one number. Carry preserves the spacing you typed.
+
+Use ASCII spaces for portable expressions. Firefox does not support non-breaking spaces reliably. WebKit draws spaced inline text correctly but can measure its width incorrectly. See [Engines](docs/engines.md#spaces-in-browser-text) for supported browser uses and canvas settings.
+
+When Carry can't be sure of an answer, it draws nothing rather than a wrong one. It doesn't divide or read decimals.
 
 ## How it works
 

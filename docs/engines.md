@@ -17,6 +17,8 @@ Not tested: DirectWrite (Windows apps outside the browser), Safari.app itself, a
 
 The browser checks compare pixels against Carry Plain, the same font with its GSUB table removed, so a correct answer is pixel-identical. Chrome and Firefox run web fonts through the OTS sanitizer first, so a rejected font would fail every case.
 
+The syntax extension adds 3,030 signed and spaced cases per direct shaping engine. The browser suite has 818 canvas cases in Chromium and WebKit, and 731 in Firefox after excluding unsupported non-breaking-space inputs. Representative spaced DOM text is also checked pixel for pixel. WebKit's spaced inline width differences are reported separately, not counted as correct measurements.
+
 ## Using Carry on a web page
 
 ```css
@@ -37,6 +39,22 @@ The browser checks compare pixels against Carry Plain, the same font with its GS
 Each property works around one engine below. `font-display: block` avoids a flash of the fallback font, which would show sums without answers.
 
 ## Differences between engines
+
+### Spaces in browser text
+
+ASCII spaces work around operators, before `=`, and between a unary sign and its number. CoreText, TextKit, and direct HarfBuzz shaping also support non-breaking spaces.
+
+Chromium canvas needs this setting before drawing spaced expressions:
+
+```js
+ctx.textRendering = "optimizeLegibility";
+ctx.font = "24px Carry";
+ctx.fillText("128 + 256 =", 0, 30);
+```
+
+Firefox can split short runs containing only non-breaking spaces through its word cache, preventing the font from seeing the complete expression. Use ASCII spaces instead. Non-breaking-space expressions are outside Firefox's supported syntax, including editable text.
+
+WebKit draws spaced inline DOM expressions correctly but can omit the generated answer from the inline width. This can affect surrounding layout, clipping, and selection. Use unspaced expressions for width-sensitive inline text. Canvas and editable text are tested separately; a correct canvas render is not proof of correct inline measurement.
 
 ### Chromium turns contextual alternates off under letter-spacing
 
@@ -71,6 +89,7 @@ If subtraction does not compute in TextEdit, check **Edit → Substitutions → 
 | Check | What it proves |
 | --- | --- |
 | `tests/test_shape.py` | 20,000 random sums, differences, and products, plus edge cases, draw the right answer in HarfBuzz, CoreText, and TextKit |
+| `tests/test_extended.py` | signed and spaced expressions, malformed inputs, maximum-width signed results, and dense lines draw the expected text and advances |
 | `tests/check_install.py` | Apple's `FontValidator` passes and macOS finds the font by name |
 | `tests/browser_test.mjs` | Chromium, Firefox, and WebKit draw every answer, pixel for pixel |
 | `tests/typing_test.mjs` | answers survive typing, deleting, and editing key by key |

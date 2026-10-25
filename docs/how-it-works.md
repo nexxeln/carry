@@ -38,11 +38,17 @@ So Carry pads both numbers to the same length with zero-width zeros. For a build
 A[n-1] … A[0]   op   B[n-1] … B[0]   =   C   R[n-1] … R[0]
 ```
 
-Answer slot `R[j]` finds `B[j]` exactly n + 2 glyphs to its left, and `A[j]` exactly 2n + 3 glyphs to its left, for every column and every pair of input lengths. Fetching the matching digit becomes a fixed-length context, which one chaining rule can match.
+Answer slot `R[j]` finds `B[j]` exactly n + 2 non-skipped glyphs to its left, and `A[j]` exactly 2n + 3 non-skipped glyphs to its left, for every column and every pair of input lengths. Fetching the matching digit becomes a fixed-length context, which one chaining rule can match.
 
 ![The glyph stream after each pass for 128+256=, from a HarfBuzz trace of a 4-digit build](images/passes-dark.svg)
 
 ## The passes
+
+Before arithmetic, syntax passes distinguish binary operators from unary signs and recognize spaces beside operators. These glyph variants retain the original outlines and advances. GDEF classifies the variants as ligatures so arithmetic lookups can skip them with `IgnoreLigatures`. Using marks instead would make HarfBuzz remove their advances.
+
+Unary minus propagates through an operand's digit variants. Addition and subtraction read signed digit values, so column totals range from −18 to 18. Multiplication reads their magnitudes and handles the result sign separately. A negative full-width sum can require an extra minus glyph before its leading carry digit.
+
+Boundary passes reject split numbers, malformed sign sequences, chains, and existing signed or spaced answers before allocating result slots.
 
 Each pass consumes one family of glyphs and produces the next:
 
@@ -55,10 +61,10 @@ The families never overlap, so a pass can't match glyphs from another stage. The
 ### Join
 
 ```
-sub [@DIGIT @OP] @JOINED' lookup keep;
+sub @JOINED @JOINED' lookup keep;
 ```
 
-Every digit, operator, or `=` that follows a digit or operator is replaced by itself. Nothing visible changes. The match marks each boundary inside an expression unsafe to break, so an engine that reuses earlier shaping after an edit (Chromium does) reshapes the whole expression instead. See [engines.md](engines.md#chromium-reshapes-from-the-last-safe-break-after-an-edit).
+Before syntax tagging, adjacent digits, operators, equals signs, and ASCII or non-breaking spaces are replaced by themselves. This includes spaces and signs after `=` so typing an existing answer also invalidates the generated answer. Nothing visible changes. The matches mark boundaries unsafe to break, so an engine that reuses earlier shaping after an edit (Chromium does) reshapes the whole expression instead. See [engines.md](engines.md#chromium-reshapes-from-the-last-safe-break-after-an-edit).
 
 ### Pad
 
@@ -85,7 +91,7 @@ An `=` after two padded numbers becomes `=` plus a carry slot plus n answer slot
 sub @VAL5 @ANY @ANY @ANY @ANY @ANY [slot.add slot.sub]' lookup take_b5;
 ```
 
-If the glyph n + 2 places to the left is a 5, the slot now holds +5 (or −5 in a subtraction). There is one rule per nonzero digit. A pad reads as zero through a fallback rule with no context, because long contexts cost HarfBuzz shaping budget only when they match. The second pass reads A, 2n + 3 places away, and adds it. Every slot now holds a column total from −9 to 18.
+If the glyph n + 2 non-skipped places to the left is a 5, the slot now holds +5 (or −5 in a subtraction). Signed variants reverse that contribution. There is one rule per nonzero digit and polarity. A pad reads as zero through a fallback rule with no context, because long contexts cost HarfBuzz shaping budget only when they match. The second pass reads A, 2n + 3 places away, and adds it. Every slot now holds a column total from −18 to 18.
 
 ### Sign
 
@@ -134,7 +140,7 @@ Row j needs `A[k-j]`, and for some slots that index is out of range. Both number
 
 ## What it costs
 
-Glyph families have fixed sizes, so the glyph count does not grow with the number of digits. Width goes into longer contexts and more passes instead. Measured on an Apple M4, within one run of `scripts/sweep.py`:
+Glyph families have fixed sizes, so the glyph count does not grow with the number of digits. Width goes into longer contexts and more passes instead. These measurements describe version 1.0's unsigned-integer machine, before the syntax extension. Measured on an Apple M4, within one run of `scripts/sweep.py`:
 
 | Max digits (all operators) | Lookups (passes) | TTF bytes | Longest sum, HarfBuzz | Longest product, HarfBuzz |
 | --- | --- | --- | --- | --- |
@@ -143,6 +149,6 @@ Glyph families have fixed sizes, so the glyph count does not grow with the numbe
 | 16 | 137 (56) | 92,952 | 70 µs | 2,525 µs |
 | 24 | 177 (80) | 153,412 | 119 µs | 7,208 µs |
 
-Doubling from 8 to 16 digits makes the longest sum about 3× slower and the longest product about 7× slower. The released font uses 16 digits for `+` and `-` and 8 for `×` and `*`, which comes to 65,696 bytes.
+In that run, doubling from 8 to 16 digits made the longest sum about 3× slower and the longest product about 7× slower. Version 1.0 used 16 digits for `+` and `-` and 8 for `×` and `*`, which came to 65,696 bytes.
 
 The full design history, with every dead end, is in [journal.md](journal.md).

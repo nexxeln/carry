@@ -34,7 +34,7 @@ def number(rng: random.Random, max_len: int) -> str:
     return "".join(digits)
 
 
-def cases(n: int, m: int, ops: str, count: int, seed: int) -> list[tuple[str, str]]:
+def cases(n: int, m: int, ops: str, count: int, seed: int, fraction_digits: int = 0) -> list[tuple[str, str]]:
     """(text typed, text the font should draw)."""
     rng = random.Random(seed)
     nines = "9" * n
@@ -51,7 +51,7 @@ def cases(n: int, m: int, ops: str, count: int, seed: int) -> list[tuple[str, st
         ("5=", "5="),
         ("=", "="),
         ("+=", "+="),
-        ("1.5+2=", "1.5+2="),
+        ("1.5+2=", "1.5+2=3.5" if fraction_digits and n >= 2 else "1.5+2="),
         ("= 1+2=", "= 1+2=3"),
         ("x = 2+3=", "x = 2+3=5"),
         ("(2+3=", "(2+3=5"),
@@ -134,7 +134,7 @@ def main() -> int:
     names = {g["name"]: g for g in meta["glyphs"]}
     n = meta["stats"]["maxDigits"]
     m = meta["stats"].get("maxMulDigits", n)
-    suite = cases(n, m, args.ops, args.cases, args.seed)
+    suite = cases(n, m, args.ops, args.cases, args.seed, meta["stats"].get("maxFractionDigits", 0))
     typed = [t for t, _ in suite]
 
     failed = False

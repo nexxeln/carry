@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Signed operands and spacing around arithmetic operators and before `=`, with original text outlines and advances preserved.
+- Existing signed or spaced answers suppress generated results, including during incremental editing.
+- Extended shaping, browser rendering, and editing regression checks. Browser-specific whitespace limitations are documented in [Engines](docs/engines.md#spaces-in-browser-text).
+
 ## 1.0.0
 
 The first release.

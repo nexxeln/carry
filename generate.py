@@ -56,7 +56,7 @@ SYMBOLS = {
 DRAWING = {"minus": "-", "uni00A0": " "}
 
 B_VALUES = range(-9, 10)
-COL_VALUES = range(-9, 19)
+COL_VALUES = range(-18, 19)
 SIGNS = ("z", "p", "n")
 CARRIES = (-1, 0, 1)
 VAL_VALUES = range(0, 91)
@@ -95,8 +95,6 @@ def settle(v: int, sign: str, carry_in: int) -> tuple[int, int, str]:
     return e % 10, max(-1, min(1, e // 10)), sign
 
 
-# Only the states the rules can produce. A zero column is the only undecided
-# one, and a negative answer only carries +1 out of a column that settles to 10.
 SIG_STATES = [(0, "z")] + [(v, s) for s in ("p", "n") for v in COL_VALUES]
 DIG_STATES = sorted(
     {settle(v, s, c) for v in COL_VALUES for s in ("p", "n") for c in CARRIES},
@@ -134,6 +132,22 @@ def inventory(debug: bool) -> list[Glyph]:
         glyphs.append(Glyph(name, "digit", tuple(BITMAPS[str(d)]), width=ADVANCE, char=str(d), meta={"value": d}))
     for name, char in SYMBOLS.items():
         glyphs.append(Glyph(name, "text", tuple(BITMAPS[DRAWING.get(name, char)]), width=ADVANCE, char=char, meta={"text": char}))
+
+    # Syntax glyphs keep their outlines and advances. GDEF ligatures, unlike
+    # marks, can be skipped without HarfBuzz zeroing their advances.
+    for name in ("space", "uni00A0", "plus", "hyphen", "minus"):
+        char = SYMBOLS[name]
+        glyphs.append(Glyph(f"syntax.{name}", "text", tuple(BITMAPS[DRAWING.get(name, char)]), width=ADVANCE, meta={"text": char}))
+    for d, name in enumerate(DIGITS):
+        glyphs.append(Glyph(f"neg.{name}", "digit", tuple(BITMAPS[str(d)]), width=ADVANCE, meta={"value": d}))
+    glyphs.append(Glyph("mul.negative", "slot"))
+    for name in ("space", "uni00A0"):
+        glyphs.append(Glyph(f"boundary.{name}", "text", width=ADVANCE, meta={"text": SYMBOLS[name]}))
+        glyphs.append(Glyph(f"invalid.{name}", "text", width=ADVANCE, meta={"text": SYMBOLS[name]}))
+    for prefix, originals in (("pending", DIGITS + ["space", "uni00A0"]), ("tail", ["space", "uni00A0", "plus", "hyphen", "minus"]), ("answered", ["equal"])):
+        for name in originals:
+            char = str(DIGITS.index(name)) if name in DIGITS else SYMBOLS[name]
+            glyphs.append(Glyph(f"{prefix}.{name}", "text", tuple(BITMAPS[DRAWING.get(name, char)]), width=ADVANCE, meta={"text": char}))
 
     ghost_zero = tuple(BITMAPS["0"]) if debug else ()
     hidden_width = ADVANCE if debug else 0
@@ -206,16 +220,24 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
     lookups: list[str] = ["lookup keep { sub @JOINED by @JOINED; } keep;"]
 
     for k in range(1, min(max(n, 2 * m), PADS_PER_PASS + 1)):
-        rules = " ".join(f"sub {d} by {' '.join(['pad'] * k)} {d};" for d in DIGITS)
+        rules = " ".join(f"sub {d} by {' '.join(['pad'] * k)} {d};" for d in DIGITS + [f"neg.{d}" for d in DIGITS])
         lookups.append(f"lookup pad{k} {{ {rules} }} pad{k};")
     for op in ("add", "sub"):
         lookups.append(f"lookup expand_{op} {{ sub equal by equal col.0 {' '.join([f'slot.{op}'] * n)}; }} expand_{op};")
     lookups.append(f"lookup expand_mul {{ sub equal by equal {' '.join([mc_name(0, 0)] * (2 * m))}; }} expand_mul;")
+    lookups.append(f"lookup expand_mul_negative {{ sub equal by equal mul.negative {' '.join([mc_name(0, 0)] * (2 * m))}; }} expand_mul_negative;")
+    lookups.append("lookup syntax_space { sub [space uni00A0] by [syntax.space syntax.uni00A0]; } syntax_space;")
+    lookups.append("lookup syntax_sign { sub [plus hyphen minus] by [syntax.plus syntax.hyphen syntax.minus]; } syntax_sign;")
+    lookups.append(f"lookup negate {{ sub {cls(DIGITS)} by {cls('neg.' + d for d in DIGITS)}; }} negate;")
+    lookups.append("lookup mul_minus { sub mul.negative by res.minus; } mul_minus;")
+    lookups.append("lookup mul_blank { sub mul.negative by blank; } mul_blank;")
+    lookups.append("lookup answered { sub equal by answered.equal; } answered;")
     for b in range(10):
         lookups.append(f"lookup take_b{b} {{ sub slot.add by {b_name(b)}; sub slot.sub by {b_name(-b)}; }} take_b{b};")
-    for a in range(10):
+        lookups.append(f"lookup take_bn{b} {{ sub slot.add by {b_name(-b)}; sub slot.sub by {b_name(b)}; }} take_bn{b};")
+    for a in range(-9, 10):
         rules = " ".join(f"sub {b_name(v)} by {col_name(v + a)};" for v in B_VALUES)
-        lookups.append(f"lookup add_a{a} {{ {rules} }} add_a{a};")
+        lookups.append(f"lookup add_a{sv(a)} {{ {rules} }} add_a{sv(a)};")
     lookups.append(
         "lookup sign_z { " + " ".join(f"sub {col_name(v)} by {sig_name(v, sign_of(v))};" for v in COL_VALUES) + " } sign_z;"
     )
@@ -231,6 +253,8 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
         lookups.append(f"lookup times_a{a} {{ {rules} }} times_a{a};")
     every_dig = [dig_name(*state) for state in DIG_STATES]
     negative_zeros = [dig_name(0, c, "n") for c in CARRIES if (0, c, "n") in DIG_STATES]
+    negative_nonzeros = [dig_name(d, c, s) for d, c, s in DIG_STATES if d and s == "n"]
+    lookups.append("lookup overflow_minus { " + " ".join(f"sub {g} by res.minus {g};" for g in negative_nonzeros) + " } overflow_minus;")
     shown = every_dig + every_mc
     lookups.append("lookup to_result { " + " ".join(f"sub {g} by res.{g[2] if g.startswith('mc') else g[1]};" for g in shown) + " } to_result;")
     zeros = [g for g in every_dig if g[1] == "0"] + [mc_name(0, c) for c in range(10)]
@@ -258,14 +282,19 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
         pad_passes.append(rules)
 
     mul_operand = " ".join(["pad"] * m + ["@PADDED"] * m)
+    mul_positive = " ".join(["pad"] * m + ["@POSPAD"] * (m - 1) + ["@POSDIGIT"])
+    mul_negative = " ".join(["pad"] * m + ["@NEGPAD"] * (m - 1) + ["@NEGDIGIT"])
     slot_rules = [
-        "ignore sub equal' [@PADDED period comma];",
-        f"ignore sub [@DIGIT @WORD @OP equal period comma] {padded(n)} @ADDOP {padded(n)} equal';",
-        f"ignore sub [@DIGIT @WORD @OP equal period comma] {padded(2 * m)} @MULOP {padded(2 * m)} equal';",
+        "ignore sub equal' [@PADDED @WORD period comma @OP equal answered.equal];",
+        f"ignore sub [@DIGIT @WORD @OP equal period comma invalid.space invalid.uni00A0] {padded(n)} @ADDOP {padded(n)} equal';",
+        f"ignore sub [@DIGIT @WORD @OP equal period comma invalid.space invalid.uni00A0] {padded(2 * m)} @MULOP {padded(2 * m)} equal';",
         f"sub {padded(n)} plus {padded(n)} equal' lookup expand_add;",
         f"sub {padded(n)} [hyphen minus] {padded(n)} equal' lookup expand_sub;",
         # An operand of up to m digits always starts with at least m pads. Requiring
         # them rejects a 2m-digit operand, which would fill the block unpadded.
+        f"sub {mul_negative} @MULOP {mul_negative} equal' lookup expand_mul;",
+        f"sub {mul_negative} @MULOP {mul_positive} equal' lookup expand_mul_negative;",
+        f"sub {mul_positive} @MULOP {mul_negative} equal' lookup expand_mul_negative;",
         f"sub {mul_operand} @MULOP {mul_operand} equal' lookup expand_mul;",
     ]
 
@@ -273,8 +302,10 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
     # distance is a pad, so a context-free fallback reads it as 0. Long
     # contexts cost HarfBuzz shaping budget only when they match.
     read_b = [f"sub @VAL{b} {wildcards(n + 1)} [slot.add slot.sub]' lookup take_b{b};" for b in range(1, 10)]
+    read_b = [f"sub neg.{DIGITS[b]} {wildcards(n + 1)} [slot.add slot.sub]' lookup take_bn{b};" for b in range(1, 10)] + read_b
     read_b.append("sub [slot.add slot.sub]' lookup take_b0;")
     read_a = [f"sub @VAL{a} {wildcards(2 * n + 2)} @COLB' lookup add_a{a};" for a in range(1, 10)]
+    read_a = [f"sub neg.{DIGITS[a]} {wildcards(2 * n + 2)} @COLB' lookup add_a{sv(-a)};" for a in range(1, 10)] + read_a
     read_a.append("sub @COLB' lookup add_a0;")
 
     sign_rules = [
@@ -317,6 +348,10 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
                  normalize),
         ]
 
+    mul_sign_rules = [
+        *[f"sub mul.negative' lookup mul_minus {' '.join([mc_name(0, 0)] * k)} {cls(mc_name(d, c) for c in range(10) for d in range(1, 10))};" for k in range(2 * m)],
+        "sub mul.negative' lookup mul_blank;",
+    ]
     show_rules = [
         f"sub equal {cls(negative_zeros)}' lookup to_minus;",
         f"sub [equal blank res.minus] {cls(zeros)}' lookup to_blank [@DIG @MC];",
@@ -327,14 +362,54 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
     # it. Before the = is typed, nothing matches across the digits of B, so
     # Chromium keeps the old shaping of the text before an edit and reshapes
     # only the tail, which never sees the whole sum. Replacing each glyph with
-    # itself when it follows a digit or operator marks the whole run.
-    join_rules = ["sub [@DIGIT @OP] @JOINED' lookup keep;"]
+    # itself across every digit, operator, =, and space marks the whole run,
+    # including an answer typed after =. This must run before syntax tagging.
+    join_rules = ["sub @JOINED @JOINED' lookup keep;"]
 
+    syntax_passes = [
+        Pass("answer_tail", "recognize an existing answer", "rtl", "distinguish a spaced answer from the next complete expression", [
+            f"rsub @POSDIGIT' [@OP equal @PENDING] by {cls('pending.' + d for d in DIGITS)};",
+            "rsub [space uni00A0]' [@OP equal @PENDING] by [pending.space pending.uni00A0];",
+            "rsub @ADDOP' [@POSDIGIT @TAIL] by [tail.plus tail.hyphen tail.minus];",
+            "rsub [space uni00A0]' [@POSDIGIT @WORD @TAIL] by [tail.space tail.uni00A0];",
+        ]),
+        Pass("answered", "leave answered expressions alone", "ltr", "an existing signed or spaced answer blocks expansion", [
+            "sub equal' lookup answered [@POSDIGIT @TAIL];",
+        ]),
+        Pass("restore_tail", "restore lexical probes", "ltr", "the lookahead leaves all original text untouched", [
+            *[f"sub pending.{name} by {name};" for name in DIGITS + ["space", "uni00A0"]],
+            *[f"sub tail.{name} by {name};" for name in ["space", "uni00A0", "plus", "hyphen", "minus"]],
+        ]),
+        Pass("spaces_left", "recognize spaces before punctuation", "rtl", "only operator-adjacent spaces can be skipped", [
+            "rsub [space uni00A0]' [@OP equal syntax.space syntax.uni00A0] by [syntax.space syntax.uni00A0];",
+        ]),
+        Pass("spaces_right", "recognize spaces after operators", "ltr", "preserve spaces within numbers as boundaries", [
+            "sub [@OP syntax.space syntax.uni00A0] [space uni00A0]' lookup syntax_space;",
+        ]),
+        Pass("unary", "recognize one unary sign", "ltr", "a sign after a digit remains a binary operator", [
+            "ignore sub @DIGIT @ADDOP' @POSDIGIT;",
+            "sub [hyphen minus]' lookup syntax_sign @POSDIGIT' lookup negate;",
+            "sub plus' lookup syntax_sign @POSDIGIT;",
+        ]),
+        Pass("unary_boundary", "retain the boundary before a signed operand", "rtl", "spaces before the first unary sign delimit the expression", [
+            "rsub [syntax.space syntax.uni00A0]' [syntax.plus syntax.hyphen syntax.minus boundary.space boundary.uni00A0] by [boundary.space boundary.uni00A0];",
+        ]),
+        Pass("unary_spacing", "skip spacing inside the expression", "ltr", "a binary operator makes the following sign spacing internal", [
+            "sub [@OP syntax.space syntax.uni00A0] [boundary.space boundary.uni00A0]' by [syntax.space syntax.uni00A0];",
+        ]),
+        Pass("negative_digits", "retain operand polarity", "ltr", "propagate the unary minus through contiguous digits", [
+            "sub @NEGDIGIT @POSDIGIT' lookup negate;",
+        ]),
+        Pass("number_boundaries", "reject a split first operand", "ltr", "a completed right operand may delimit the next expression, but a bare number may not", [
+            *[f"ignore sub @OP {digits(k)} [space uni00A0]';" for k in range(1, max(n, m) + 1)],
+            "sub [@DIGIT invalid.space invalid.uni00A0] [space uni00A0]' by [invalid.space invalid.uni00A0];",
+        ]),
+    ]
     passes = [
         Pass("join", "hold the expression together", "ltr",
-             "every digit, operator, or = that follows a digit or operator is replaced by itself. nothing visible changes, but the match tells the engine this text has to be reshaped as one piece after an edit.",
+              "adjacent digits, operators, equals signs, and ASCII/NBSP spaces are replaced by themselves before parsing. the engine must reshape the whole expression when an answer is typed or edited.",
              join_rules),
-    ] + [
+    ] + syntax_passes + [
         Pass("pad" if i == 0 else f"pad{i + 1}", "pad both operands", "ltr",
              f"each operand's first digit looks ahead to count its own length, then a multiple substitution inserts zero-width zeros so every operand is exactly {n} glyphs long ({2 * m} for multiplication).",
              rules)
@@ -347,7 +422,7 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
              f"every answer slot grabs the digit exactly {n + 2} glyphs to its left, which is always the matching digit of B (negated for subtraction).",
              read_b, n + 2),
         Pass("read_a", "add the A digit", "ltr",
-             f"every slot grabs the digit {2 * n + 3} glyphs to its left, the matching digit of A, and adds it. now each slot holds a column total from -9 to 18.",
+             f"every slot grabs the digit {2 * n + 3} glyphs to its left, the matching digit of A, and adds it. now each slot holds a column total from -18 to 18.",
              read_a, 2 * n + 3),
         Pass("sign", "find the sign", "ltr",
              "left to right, each slot copies the sign of the first nonzero column before it. the last slot ends up knowing whether the whole answer is negative.",
@@ -356,6 +431,10 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
              "a reverse chaining lookup walks right to left. each slot reads the carry its right neighbour just produced, settles into one digit, and passes its own carry left.",
              carry_rules),
         *row_passes,
+        Pass("mul_sign", "draw the product sign", "ltr", "negative zero remains zero", mul_sign_rules),
+        Pass("overflow_sign", "draw a full-width negative sum", "ltr", "a negative sum may need both a leading digit and a minus", [
+            f"sub equal {cls(negative_nonzeros)}' lookup overflow_minus;",
+        ]),
         Pass("show", "draw the answer", "ltr",
              "leading zeros become zero-width blanks, a negative answer gets its minus sign, and every other slot becomes a visible digit.",
              show_rules),
@@ -363,15 +442,21 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
 
     classes = [
         f"@ANY = {cls(names[1:])};",
-        f"@DIGIT = {cls(DIGITS)};",
+        f"@POSDIGIT = {cls(DIGITS)};",
+        f"@NEGDIGIT = {cls('neg.' + d for d in DIGITS)};",
+        "@DIGIT = [@POSDIGIT @NEGDIGIT];",
+        "@POSPAD = [@POSDIGIT pad];",
+        "@NEGPAD = [@NEGDIGIT pad];",
+        f"@PENDING = {cls('pending.' + d for d in DIGITS + ['space', 'uni00A0'])};",
+        "@TAIL = [tail.space tail.uni00A0 tail.plus tail.hyphen tail.minus];",
         "@PADDED = [@DIGIT pad];",
         "@ADDOP = [plus hyphen minus];",
         "@MULOP = [asterisk multiply];",
         "@OP = [@ADDOP @MULOP];",
-        "@JOINED = [@DIGIT @OP equal];",
+        "@JOINED = [@DIGIT @OP equal space uni00A0];",
         # A digit glued to a letter or underscore is part of a name like x2 or 0x1F, not a number.
         f"@WORD = {cls([UV2AGL[c] for c in [*range(0x41, 0x5B), *range(0x61, 0x7B), 0x5F]])};",
-        *[f"@VAL{d} = [{DIGITS[d]}{' pad' if d == 0 else ''}];" for d in range(10)],
+        *[f"@VAL{d} = [{DIGITS[d]} neg.{DIGITS[d]}{' pad' if d == 0 else ''}];" for d in range(10)],
         f"@COLB = {cls(b_name(v) for v in B_VALUES)};",
         f"@COL = {cls(col_name(v) for v in COL_VALUES)};",
         *[f"@SIG{s.upper()} = {cls(sig_name(v, own) for v, own in SIG_STATES if own == s)};" for s in SIGNS],
@@ -384,10 +469,15 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
 
     fea = ["languagesystem DFLT dflt;", "languagesystem latn dflt;", "", *classes, ""]
     fea += lookups
+    fea.append("table GDEF { GlyphClassDef , [syntax.space syntax.uni00A0 syntax.plus syntax.hyphen syntax.minus mul.negative], , ; } GDEF;")
     fea += ["", "feature calt {"]
     for p in passes:
         fea.append(f"  # {p.title}: {p.blurb}")
         fea.append(f"  lookup {p.name.upper()} {{")
+        if p.name not in ("answer_tail", "answered", "restore_tail", "spaces_left", "spaces_right", "unary_boundary", "unary_spacing", "mul_sign"):
+            fea.append("    lookupflag IgnoreLigatures;")
+        else:
+            fea.append("    lookupflag 0;")
         fea += [f"    {rule}" for rule in p.body]
         fea.append(f"  }} {p.name.upper()};")
     fea.append("} calt;")
@@ -532,7 +622,7 @@ def main() -> None:
 
     calt = next(f for f in font["GSUB"].table.FeatureList.FeatureRecord if f.FeatureTag == "calt")
     meta = {
-        "stats": {**stats(args.out / "Carry.ttf", args.digits), "maxMulDigits": args.mul_digits},
+        "stats": {**stats(args.out / "Carry.ttf", args.digits), "maxMulDigits": args.mul_digits, "arithmeticStage": "syntax"},
         "passes": [
             {"lookup": index, "name": p.name, "title": p.title, "direction": p.direction, "blurb": p.blurb, "distance": p.distance}
             for index, p in zip(calt.Feature.LookupListIndex, passes)

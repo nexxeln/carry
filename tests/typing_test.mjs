@@ -13,6 +13,7 @@ import { chromium, firefox, webkit } from "playwright"
 
 const font = readFileSync(process.argv[2] ?? new URL("../build/Carry.ttf", import.meta.url).pathname).toString("base64")
 const plain = readFileSync(new URL("../build/browser/Carry-Plain.ttf", import.meta.url)).toString("base64")
+const meta = JSON.parse(readFileSync(new URL("../build/carry.json", import.meta.url))).stats
 // [keys pressed, text the textarea should then hold, text the font should draw]
 const edits = [
   ["1+1=", "1+1=", "1+1=2"],
@@ -20,11 +21,33 @@ const edits = [
   ["5-7=", "5-7=", "5-7=-2"],
   ["12×34=", "12×34=", "12×34=408"],
   ["1+1=2", "1+1=2", "1+1=2"],
-  ["1.5+2=", "1.5+2=", "1.5+2="],
+  ["1.5+2=", "1.5+2=", meta.maxFractionDigits ? "1.5+2=3.5" : "1.5+2="],
   ["1+1=2⌫", "1+1=", "1+1=2"],
   ["12+5=←←0", "12+05=", "12+05=17"],
   ["999+1=←←←←⌫8", "989+1=", "989+1=990"],
 ]
+if (meta.arithmeticStage) edits.push(
+  ["128 + 256 =", "128 + 256 =", "128 + 256 =384"],
+  ["-5+7=", "-5+7=", "-5+7=2"],
+  ["5×-7=", "5×-7=", "5×-7=-35"],
+  ["-5--7=", "-5--7=", "-5--7=2"],
+  ["-5+7=←←←←⌫", "5+7=", "5+7=12"],
+  ["1+2= 3", "1+2= 3", "1+2= 3"],
+  ["1 + 2 = -3", "1 + 2 = -3", "1 + 2 = -3"],
+  ["1+2=\u00a0+3", "1+2=\u00a0+3", "1+2=\u00a0+3"],
+  ["1+2= 3⌫", "1+2= ", "1+2=3 "],
+)
+if (meta.maxFractionDigits) edits.push(
+  ["0.1+0.2=", "0.1+0.2=", "0.1+0.2=0.3"],
+  ["19.99×3=", "19.99×3=", "19.99×3=59.97"],
+  ["1.5+2=←←←←⌫", "15+2=", "15+2=17"],
+)
+if (meta.maxDivDigits) edits.push(
+  ["84÷7=", "84÷7=", "84÷7=12"],
+  ["17/5=", "17/5=", "17/5=3 r 2"],
+  ["5/0=", "5/0=", "5/0="],
+  ["17/5=←⌫2", "17/2=", "17/2=8 r 1"],
+)
 
 let failed = false
 for (const [name, engine] of [["chromium", chromium], ["firefox", firefox], ["webkit", webkit]]) {
@@ -39,6 +62,7 @@ for (const [name, engine] of [["chromium", chromium], ["firefox", firefox], ["we
   const box = page.locator("textarea")
   const results = []
   for (const [typed, value, want] of edits) {
+    if (name === "firefox" && typed.includes("\u00a0")) continue
     await box.click()
     await page.keyboard.press("ControlOrMeta+A")
     await page.keyboard.press("Backspace")
