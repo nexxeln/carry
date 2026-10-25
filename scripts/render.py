@@ -2,8 +2,8 @@
 
     uv run scripts/render.py
 
-Writes docs/images/hero.svg, an LED panel that types 128+256= one key at a
-time. Each frame lights the dots of the glyphs `hb-shape` returns for the
+Writes docs/images/hero.svg, an LED panel cycling through integer arithmetic,
+exact decimals, and division one key at a time. Each frame lights the dots of the glyphs `hb-shape` returns for the
 text typed so far, at the advances it returns. Also writes
 hidden-{dark,light}.svg with `hb-view` and the debug font, and
 passes-{dark,light}.svg from `hb-shape --trace` on a 4-digit build.
@@ -11,21 +11,43 @@ passes-{dark,light}.svg from `hb-shape --trace` on a 4-digit build.
 
 import subprocess
 import sys
+from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from generate import build_carry, inventory  # noqa: E402
+from generate import build_carry  # noqa: E402
 
 IMAGES = ROOT / "docs/images"
 THEMES = {
     "dark": {"fg": "ecebe8", "dim": "6b6b6b", "work": "7dd3fc", "accent": "ff6b35", "chip": "1c1c1c", "line": "2e2e2e"},
     "light": {"fg": "161616", "dim": "a3a3a3", "work": "0369a1", "accent": "e8501d", "chip": "f4f4f4", "line": "e2e2e2"},
 }
-TYPED = "128+256="
+SCENES = [
+    ("Integer addition", "128+256="),
+    ("Signed subtraction", "5 - 7 ="),
+    ("Signed multiplication", "-5×-7="),
+    ("Decimal addition", "12.50+3.75="),
+    ("Exact decimals", "0.1+0.2="),
+    ("Decimal multiplication", "19.99×3="),
+    ("Four fractional places", "0.01×0.01="),
+    ("Exact division", "84÷7="),
+    ("Quotient + remainder", "-17/5="),
+]
 PITCH, RADIUS, MARGIN = 12, 4.4, 2
+HEADER = 32
+
+
+@dataclass(frozen=True)
+class HeroFrame:
+    scene: int
+    typed: str
+    cells: set[tuple[int, int]]
+    end: int
+    start: float
+    stop: float
 
 
 def hb_view(font: Path, lines: list[str], theme: dict, out: Path, size: int) -> None:
@@ -39,12 +61,12 @@ def hb_view(font: Path, lines: list[str], theme: dict, out: Path, size: int) -> 
 
 
 def shaped(font: Path, text: str) -> list[tuple[str, int]]:
-    out = subprocess.run(["hb-shape", "--no-clusters", str(font), text], capture_output=True, text=True, check=True).stdout
+    out = subprocess.run(["hb-shape", "--no-clusters", "--", str(font), text], capture_output=True, text=True, check=True).stdout
     return [(name, int(adv)) for name, adv in (g.split("+") for g in out.strip()[1:-1].split("|"))]
 
 
-def lit_cells(font: Path, text: str, bitmaps: dict[str, tuple[str, ...]]) -> set[tuple[int, int]]:
-    """(column, row) of every lit dot, on a grid of 100-unit cells."""
+def lit_cells(font: Path, text: str, bitmaps: dict[str, tuple[str, ...]]) -> tuple[set[tuple[int, int]], int]:
+    """Lit dots and final advance, on a grid of 100-unit cells."""
     cells, x = set(), 0
     for name, advance in shaped(font, text):
         for row, line in enumerate(bitmaps.get(name, ())):
@@ -52,49 +74,55 @@ def lit_cells(font: Path, text: str, bitmaps: dict[str, tuple[str, ...]]) -> set
                 if dot == "#":
                     cells.add((x // 100 + col, row))
         x += advance
-    return cells
+    return cells, x // 100
 
 
-def hero_svg(font: Path) -> str:
-    bitmaps = {g.name: g.bitmap for g in inventory(debug=False)}
-    prefixes = [TYPED[: i + 1] for i in range(len(TYPED))]
-    frames = [lit_cells(font, p, bitmaps) for p in prefixes]
-    ends = [len(p) * 6 for p in prefixes]
-    ends[-1] = max(c for c, _ in frames[-1]) + 2
-    cols = ends[-1] + 7 + 2 * MARGIN
+def hero_svg(font: Path, bitmaps: dict[str, tuple[str, ...]]) -> str:
+    key, hold, rest = 0.16, 2.4, 0.4
+    frames, clock = [], 0.0
+    for scene, (_, expression) in enumerate(SCENES):
+        frames.append(HeroFrame(scene, "", set(), 0, clock, clock + key))
+        for i in range(len(expression)):
+            typed = expression[:i + 1]
+            cells, end = lit_cells(font, typed, bitmaps)
+            start = clock + key * (i + 1)
+            stop = clock + key * (i + 2) if i < len(expression) - 1 else start + hold
+            frames.append(HeroFrame(scene, typed, cells, end, start, stop))
+        clock = frames[-1].stop
+        frames.append(HeroFrame(scene, "", set(), 0, clock, clock + rest))
+        clock += rest
+    total = clock
+    cols = max(frame.end for frame in frames) + 7 + 2 * MARGIN
     rows = 7 + 2 * MARGIN
-    width, height = cols * PITCH, rows * PITCH
+    width, height = cols * PITCH, rows * PITCH + HEADER
 
     def dots(cells) -> str:
         return "".join(
-            f"M{(c + MARGIN) * PITCH + PITCH / 2 - RADIUS:.1f} {(r + MARGIN) * PITCH + PITCH / 2:.1f}a{RADIUS} {RADIUS} 0 1 0 {2 * RADIUS} 0a{RADIUS} {RADIUS} 0 1 0 {-2 * RADIUS} 0"
+            f"M{(c + MARGIN) * PITCH + PITCH / 2 - RADIUS:.1f} {HEADER + (r + MARGIN) * PITCH + PITCH / 2:.1f}a{RADIUS} {RADIUS} 0 1 0 {2 * RADIUS} 0a{RADIUS} {RADIUS} 0 1 0 {-2 * RADIUS} 0"
             for c, r in sorted(cells)
         )
 
-    # Timeline: one key every 0.16 s, the finished sum held, a short blank, repeat.
-    key, hold, rest = 0.16, 3.2, 0.5
-    total = key * len(frames) + hold + rest
     css, groups = [], []
-    caret = f'class="caret" fill="#ff6b35" y="{MARGIN * PITCH + PITCH / 2 - RADIUS:.1f}" width="{4 * PITCH + 2 * RADIUS}" height="{6 * PITCH + 2 * RADIUS}"'
-    for i, cells in enumerate(frames):
-        start = key * (i + 1) / total * 100
-        stop = (key * (i + 2) if i < len(frames) - 1 else key * len(frames) + hold) / total * 100
-        css.append(f"@keyframes f{i}{{0%,{start - 0.01:.2f}%{{opacity:0}}{start:.2f}%,{stop - 0.01:.2f}%{{opacity:1}}{stop:.2f}%,100%{{opacity:0}}}}"
-                   f".f{i}{{animation:f{i} {total:.2f}s infinite}}")
-        groups.append(f'<g class="frame f{i}{" last" if i == len(frames) - 1 else ""}"><path class="lit" d="{dots(cells)}"/>'
-                      f'<rect {caret} x="{(ends[i] + 1 + MARGIN) * PITCH + PITCH / 2 - RADIUS:.1f}"/></g>')
-    start, stop = key / total * 100, (key * len(frames) + hold) / total * 100
-    css.append(f"@keyframes blank{{0%,{start - 0.01:.2f}%{{opacity:1}}{start:.2f}%,{stop - 0.01:.2f}%{{opacity:0}}{stop:.2f}%,100%{{opacity:1}}}}"
-               f".blank{{animation:blank {total:.2f}s infinite}}")
-    groups.append(f'<g class="frame blank"><rect {caret} x="{MARGIN * PITCH + PITCH / 2 - RADIUS:.1f}"/></g>')
+    caret = f'class="caret" fill="#ff6b35" y="{HEADER + MARGIN * PITCH + PITCH / 2 - RADIUS:.1f}" width="{4 * PITCH + 2 * RADIUS}" height="{6 * PITCH + 2 * RADIUS}"'
+    for i, frame in enumerate(frames):
+        start, stop = frame.start / total * 100, frame.stop / total * 100
+        css.append(f"@keyframes f{i}{{0%,100%{{opacity:0}}{start:.6f}%{{opacity:1}}{stop:.6f}%{{opacity:0}}}}"
+                   f".f{i}{{animation:f{i} {total:.2f}s steps(1,end) infinite}}")
+        caption, expression = SCENES[frame.scene]
+        last = frame.scene == len(SCENES) - 1 and frame.typed == expression
+        cursor = frame.end + 1 if frame.typed else 0
+        groups.append(f'<g class="frame f{i}{" last" if last else ""}" data-scene="{frame.scene}" data-typed="{escape(frame.typed, quote=True)}" data-start="{frame.start:.4f}" data-stop="{frame.stop:.4f}">'
+                      f'<text class="caption" x="24" y="26">{escape(caption)}</text>'
+                      f'<g filter="url(#glow)"><path class="lit" d="{dots(frame.cells)}"/>'
+                      f'<rect {caret} x="{(cursor + MARGIN) * PITCH + PITCH / 2 - RADIUS:.1f}"/></g></g>')
     css.append("@media (prefers-reduced-motion:reduce){.frame{animation:none;opacity:0}.last{opacity:1}}")
     unlit = {(c, r) for c in range(cols - 2 * MARGIN) for r in range(7)}
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-label="An LED display typing 128+256= in Carry. When the = is typed, 384 appears.">
-<style>.frame{{fill:#f7f2e4;opacity:0}}{"".join(css)}</style>
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" data-duration="{total:.2f}" role="img" aria-label="Carry types integer arithmetic, signed and spaced expressions, exact decimals, multiplication, and division with remainders. An orange block caret follows the typing.">
+<style>.frame{{fill:#f7f2e4;opacity:0}}.caption{{fill:#a6a89a;font:20px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:2px;text-transform:uppercase}}{"".join(css)}</style>
 <defs><filter id="glow" x="-5%" y="-20%" width="110%" height="140%"><feGaussianBlur stdDeviation="2.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
 <rect width="{width}" height="{height}" rx="14" fill="#0c0c0c"/>
 <path fill="#1d1d1d" d="{dots(unlit)}"/>
-<g filter="url(#glow)">{"".join(groups)}</g>
+{"".join(groups)}
 </svg>
 """
 
@@ -176,16 +204,17 @@ def main() -> None:
     build = ROOT / "build/render"
     build.mkdir(parents=True, exist_ok=True)
 
-    fonts = {}
+    fonts, bitmaps = {}, {}
     for name, n, m, debug in (("Carry", 16, 8, False), ("Carry-Debug", 16, 8, True), ("Carry-4", 4, 2, False)):
         font, fea, passes, glyphs = build_carry(n, m, debug)
         fonts[name] = build / f"{name}.ttf"
+        bitmaps[name] = {g.name: g.bitmap for g in glyphs}
         font.save(fonts[name])
         if name == "Carry-4":
             calt = next(f for f in font["GSUB"].table.FeatureList.FeatureRecord if f.FeatureTag == "calt")
             names = dict(zip(calt.Feature.LookupListIndex, (p.name.replace("_", " ") for p in passes)))
 
-    (IMAGES / "hero.svg").write_text(hero_svg(fonts["Carry"]))
+    (IMAGES / "hero.svg").write_text(hero_svg(fonts["Carry"], bitmaps["Carry"]))
     rows = trace_rows(fonts["Carry-4"], "128+256=", names)
     for theme_name, theme in THEMES.items():
         hb_view(fonts["Carry-Debug"], ["128+256="], theme, IMAGES / f"hidden-{theme_name}.svg", 48)
