@@ -80,17 +80,22 @@ def hero_svg(font: Path) -> str:
         stop = (key * (i + 2) if i < len(frames) - 1 else key * len(frames) + hold) / total * 100
         css.append(f"@keyframes f{i}{{0%,{start - 0.01:.2f}%{{opacity:0}}{start:.2f}%,{stop - 0.01:.2f}%{{opacity:1}}{stop:.2f}%,100%{{opacity:0}}}}"
                    f".f{i}{{animation:f{i} {total:.2f}s infinite}}")
-        groups.append(f'<path class="lit f{i}{" last" if i == len(frames) - 1 else ""}" d="{dots(cells)}"/>')
-    caret = {(ends[-1] + 1, r) for r in range(7)}
+        caret = {(ends[i] + 1, r) for r in range(7)}
+        groups.append(f'<g class="frame f{i}{" last" if i == len(frames) - 1 else ""}"><path class="lit" d="{dots(cells)}"/>'
+                      f'<path class="caret" fill-opacity="0.55" d="{dots(caret)}"/></g>')
+    start, stop = key / total * 100, (key * len(frames) + hold) / total * 100
+    css.append(f"@keyframes blank{{0%,{start - 0.01:.2f}%{{opacity:1}}{start:.2f}%,{stop - 0.01:.2f}%{{opacity:0}}{stop:.2f}%,100%{{opacity:1}}}}"
+               f".blank{{animation:blank {total:.2f}s infinite}}")
+    groups.append(f'<g class="frame blank"><path class="caret" fill-opacity="0.55" d="{dots({(0, r) for r in range(7)})}"/></g>')
     css.append(f"@keyframes caret{{0%,49%{{opacity:1}}50%,100%{{opacity:0}}}}.caret{{animation:caret 1s steps(1) infinite}}")
-    css.append("@media (prefers-reduced-motion:reduce){.lit{animation:none;opacity:0}.last{opacity:1}.caret{animation:none}}")
+    css.append("@media (prefers-reduced-motion:reduce){.frame{animation:none;opacity:0}.last{opacity:1}.caret{animation:none}}")
     unlit = {(c, r) for c in range(cols - 2 * MARGIN) for r in range(7)}
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-label="An LED display typing 128+256= in Carry. When the = is typed, 384 appears.">
-<style>.lit{{fill:#f7f2e4;opacity:0}}{"".join(css)}</style>
+<style>.frame{{fill:#f7f2e4;opacity:0}}{"".join(css)}</style>
 <defs><filter id="glow" x="-5%" y="-20%" width="110%" height="140%"><feGaussianBlur stdDeviation="2.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
 <rect width="{width}" height="{height}" rx="14" fill="#0c0c0c"/>
 <path fill="#1d1d1d" d="{dots(unlit)}"/>
-<g filter="url(#glow)">{"".join(groups)}<path class="caret" fill="#f7f2e4" fill-opacity="0.55" d="{dots(caret)}"/></g>
+<g filter="url(#glow)">{"".join(groups)}</g>
 </svg>
 """
 
