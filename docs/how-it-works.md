@@ -150,6 +150,20 @@ Long multiplication, one row per digit of B, three passes per row:
 
 Row j needs `A[k-j]`, and for some slots that index is out of range. Both numbers are padded to twice their length, so every out-of-range read lands on a pad or the operator and reads as zero. Validation requires at least m leading pads on each number, which rejects a 2m-digit number that would otherwise fill the block unpadded.
 
+## Integer division
+
+`DivisionSpec` and `DivisionMachine` in `division_features.py` implement four-digit decimal long division. The shared syntax passes recognize `/` and `÷`, preserve unary signs and spacing, and pad each operand to four logical digits. A separate validation pass rejects zero divisors, decimal operands, oversized numbers, typed answers, and expression chains before creating result slots.
+
+The workspace contains a four-digit quotient, a five-digit remainder, and five scratch cells for subtraction and borrows. It consumes the dividend's digits from left to right. Each digit shifts the remainder and brings down one source digit, then runs exactly nine trial subtractions of the divisor. A nonnegative trial updates the remainder and increments the current quotient digit.
+
+Before bringing down a digit, the remainder is less than the divisor. Afterward, it is less than ten times the divisor. Nine successful subtractions therefore cover every possible quotient digit. The generator unrolls all 36 trials into lookup passes. The number of scheduled trials depends on the digit limit, not the numeric quotient.
+
+Scheduled passes call shared contextual kernels through distinct wrappers. This keeps the font below HarfBuzz's contextual-subtable sanitizer limit without relying on engines to repeat the same feature lookup index. Division lookups use extension offsets to fit the combined table. `Pass.use_extension` records that requirement explicitly.
+
+Arithmetic first computes unsigned quotient and remainder. Sign passes negate a nonzero quotient when operand signs differ, and negate a nonzero remainder when the dividend is negative. Thus `-17÷5=` draws `-3 r -2`, because −17 = (−3 × 5) + (−2). There is no negative zero.
+
+Formatting strips generated leading zeros and omits a zero remainder. The final pass expands the remainder separator into three ordinary glyphs for ` r `. A single wide glyph with the same outline produced different browser rasterization. Division's fixed-workspace lookups finish before that expansion.
+
 ## What it costs
 
 Glyph families have fixed sizes, so the glyph count does not grow with the number of digits. Width goes into longer contexts and more passes instead. These measurements describe version 1.0's unsigned-integer machine, before the syntax extension. Measured on an Apple M4, within one run of `scripts/sweep.py`:

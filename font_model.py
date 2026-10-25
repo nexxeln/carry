@@ -23,6 +23,7 @@ class Pass:
     blurb: str
     body: list[str]
     distance: int | None = None
+    use_extension: bool = False
 
 
 def cls(names) -> str:

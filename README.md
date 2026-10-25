@@ -17,7 +17,7 @@
 
 <br>
 
-Carry has no code inside. Every answer comes from OpenType substitution rules, the machinery other fonts use for ligatures, and one Python file generates all of them. It adds and subtracts numbers up to 16 digits and multiplies numbers up to 8 digits, exactly, which is past what JavaScript's `Number` can hold.
+Carry has no code inside. Every answer comes from OpenType substitution rules, the machinery other fonts use for ligatures, built by a Python generator. It adds and subtracts integers up to 16 digits and multiplies integers up to 8 digits, exactly, which is past what JavaScript's `Number` can hold. It also supports exact decimals and four-digit integer division with remainders.
 
 ## Use it
 
@@ -51,6 +51,9 @@ On the web, serve `dist/Carry.woff2` and keep the rules switched on:
 | `12.50+3.75=` | `12.50+3.75=16.25` |
 | `0.1+0.2=` | `0.1+0.2=0.3` |
 | `19.99×3=` | `19.99×3=59.97` |
+| `84÷7=` | `84÷7=12` |
+| `17/5=` | `17/5=3 r 2` |
+| `-17÷5=` | `-17÷5=-3 r -2` |
 | `12+3=15` | nothing extra, because the answer is already there |
 | `x2+3=` | nothing extra, because `x2` is a name, not a number |
 
@@ -60,7 +63,9 @@ Use ASCII spaces for portable expressions. Firefox does not support non-breaking
 
 Decimal operands accept up to two fractional digits, with up to 16 integer digits for addition/subtraction and 8 for multiplication. Results are exact, never rounded. Unneeded trailing fractional zeros disappear, so `1.20+1.30=` draws `2.5`; products can have up to four fractional digits. A decimal point needs digits on both sides. `.5` and `1.` are unsupported.
 
-When Carry can't be sure of an answer, it draws nothing rather than a wrong one. It doesn't divide.
+Division accepts integer operands of up to four digits, including leading zeros. `/` and `÷` are equivalent. The quotient truncates toward zero; a nonzero remainder has the dividend's sign. Division by zero and decimal division draw no answer. Carry never checks an answer you have already typed.
+
+When Carry can't be sure of an answer, it draws nothing rather than a wrong one.
 
 ## How it works
 

@@ -18,6 +18,7 @@ from fontTools.ttLib.tables import ttProgram
 from fontTools.ttLib import TTFont, newTable
 
 from decimal_features import DecimalMachine, DecimalSpec
+from division_features import DivisionMachine, DivisionSpec
 from font_model import ADVANCE, DOT, Glyph, Pass, cls, sv
 from pixels import BITMAPS
 
@@ -47,12 +48,14 @@ SYMBOLS = {
     "equal": "=",
     "asterisk": "*",
     "multiply": "×",
+    "divide": "÷",
     "period": ".",
     "comma": ",",
     "space": " ",
     "uni00A0": "\u00a0",
 }
 DRAWING = {"minus": "-", "uni00A0": " "}
+DIVISION_SPEC = DivisionSpec()
 
 B_VALUES = range(-9, 10)
 COL_VALUES = range(-18, 19)
@@ -187,11 +190,13 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
     """
     any_glyph = "@ANY"
     decimal = DecimalMachine(DecimalSpec(n, m), DIGITS, {dig_name(*s): s for s in DIG_STATES}, PADS_PER_PASS)
+    division = DivisionMachine(DIVISION_SPEC)
     wildcards = lambda count: " ".join([any_glyph] * count)
     lookups: list[str] = ["lookup keep { sub @JOINED by @JOINED; } keep;"]
     lookups += decimal.lookups()
+    lookups += division.lookups()
 
-    for k in range(1, min(max(n, 2 * m), PADS_PER_PASS + 1)):
+    for k in range(1, min(max(n, 2 * m, division.spec.digits), PADS_PER_PASS + 1)):
         rules = " ".join(f"sub {d} by {' '.join(['pad'] * k)} {d};" for d in DIGITS + [f"neg.{d}" for d in DIGITS])
         lookups.append(f"lookup pad{k} {{ {rules} }} pad{k};")
     for op in ("add", "sub"):
@@ -238,7 +243,7 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
     padded = lambda width: " ".join(["@PADDED"] * width)
     digits = lambda count: " ".join(["@DIGIT"] * count)
     # (operator class, padded width, longest operand that fits)
-    layouts = [("@ADDOP", n, n), ("@MULOP", 2 * m, m)]
+    layouts = [("@ADDOP", n, n), ("@MULOP", 2 * m, m), ("@DIVOP", division.spec.digits, division.spec.digits)]
     pad_passes = []
     longest_pad = max(width - 1 for _, width, _ in layouts)
     for chunk in range(max(1, -(-longest_pad // PADS_PER_PASS))):
@@ -257,9 +262,9 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
     mul_positive = " ".join(["pad"] * m + ["@POSPAD"] * (m - 1) + ["@POSDIGIT"])
     mul_negative = " ".join(["pad"] * m + ["@NEGPAD"] * (m - 1) + ["@NEGDIGIT"])
     slot_rules = [
-        "ignore sub equal' [@PADDED @WORD period comma @OP equal answered.equal];",
-        f"ignore sub [@DIGIT @WORD @OP equal dec.equal period comma invalid.space invalid.uni00A0] {padded(n)} @ADDOP {padded(n)} equal';",
-        f"ignore sub [@DIGIT @WORD @OP equal dec.equal period comma invalid.space invalid.uni00A0] {padded(2 * m)} @MULOP {padded(2 * m)} equal';",
+        "ignore sub equal' [@PADDED @WORD period comma @OP equal dec.equal answered.equal];",
+        f"ignore sub [@DIGIT @WORD @OP equal dec.equal answered.equal period comma invalid.space invalid.uni00A0] {padded(n)} @ADDOP {padded(n)} equal';",
+        f"ignore sub [@DIGIT @WORD @OP equal dec.equal answered.equal period comma invalid.space invalid.uni00A0] {padded(2 * m)} @MULOP {padded(2 * m)} equal';",
         f"sub {padded(n)} plus {padded(n)} equal' lookup expand_add;",
         f"sub {padded(n)} [hyphen minus] {padded(n)} equal' lookup expand_sub;",
         # An operand of up to m digits always starts with at least m pads. Requiring
@@ -375,8 +380,8 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
             "sub @NEGDIGIT @POSDIGIT' lookup negate;",
         ]),
         Pass("number_boundaries", "reject a split first operand", "ltr", "a completed right operand may delimit the next expression, but a bare number may not", [
-            *[f"ignore sub @OP {digits(k)} [space uni00A0]';" for k in range(1, max(n, m) + 1)],
-            *[f"ignore sub @OP {digits(k)} period {digits(f)} [space uni00A0]';" for k in range(1, max(n, m) + 1) for f in range(1, decimal.spec.fraction_digits + 1)],
+            *[f"ignore sub @OP {digits(k)} [space uni00A0]';" for k in range(1, max(n, m, division.spec.digits) + 1)],
+            *[f"ignore sub @OP {digits(k)} period {digits(f)} [space uni00A0]';" for k in range(1, max(n, m, division.spec.digits) + 1) for f in range(1, decimal.spec.fraction_digits + 1)],
             "sub [@DIGIT invalid.space invalid.uni00A0] [space uni00A0]' by [invalid.space invalid.uni00A0];",
         ]),
     ]
@@ -390,6 +395,7 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
              rules)
         for i, rules in enumerate(pad_passes)
     ] + [
+        *division.passes(),
         Pass("slots", "make room for the answer", "ltr",
              f"an = that follows two padded operands becomes = plus a carry slot plus {n} blank answer slots ({2 * m} slots for multiplication).",
              slot_rules),
@@ -430,7 +436,8 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
         "@PADDED = [@DIGIT pad];",
         "@ADDOP = [plus hyphen minus];",
         "@MULOP = [asterisk multiply];",
-        "@OP = [@ADDOP @MULOP dec.plus dec.hyphen dec.minus dec.asterisk dec.multiply];",
+        "@DIVOP = [slash divide];",
+        "@OP = [@ADDOP @MULOP @DIVOP dec.plus dec.hyphen dec.minus dec.asterisk dec.multiply];",
         "@JOINED = [@DIGIT @OP equal space uni00A0 period];",
         # A digit glued to a letter or underscore is part of a name like x2 or 0x1F, not a number.
         f"@WORD = {cls([UV2AGL[c] for c in [*range(0x41, 0x5B), *range(0x61, 0x7B), 0x5F]])};",
@@ -445,6 +452,7 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
         f"@VALS = {cls(every_val)};",
     ]
     classes += decimal.declarations()
+    classes += division.declarations()
 
     fea = ["languagesystem DFLT dflt;", "languagesystem latn dflt;", "", *classes, ""]
     fea += lookups
@@ -452,7 +460,8 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
     fea += ["", "feature calt {"]
     for p in passes:
         fea.append(f"  # {p.title}: {p.blurb}")
-        fea.append(f"  lookup {p.name.upper()} {{")
+        extension = " useExtension" if p.use_extension else ""
+        fea.append(f"  lookup {p.name.upper()}{extension} {{")
         if p.name not in ("answer_tail", "answered", "restore_tail", "spaces_left", "spaces_right", "unary_boundary", "unary_spacing", "mul_sign", "dec_product_sign"):
             fea.append("    lookupflag IgnoreLigatures;")
         else:
@@ -530,6 +539,7 @@ def assemble(family: str, glyphs: list[Glyph], drawings: dict, fea: str) -> TTFo
 def build_carry(n: int, m: int, debug: bool) -> tuple[TTFont, str, list[Pass], list[Glyph]]:
     glyphs = inventory(debug)
     glyphs += DecimalMachine(DecimalSpec(n, m), DIGITS, {dig_name(*s): s for s in DIG_STATES}).inventory()
+    glyphs += DivisionMachine(DIVISION_SPEC).inventory()
     fea, passes = features(n, m, [g.name for g in glyphs])
     family = "Carry Debug" if debug else "Carry"
     font = assemble(family, glyphs, {g.name: draw(g) for g in glyphs}, fea)
@@ -602,7 +612,7 @@ def main() -> None:
 
     calt = next(f for f in font["GSUB"].table.FeatureList.FeatureRecord if f.FeatureTag == "calt")
     meta = {
-        "stats": {**stats(args.out / "Carry.ttf", args.digits), "maxMulDigits": args.mul_digits, "arithmeticStage": "decimals", "maxFractionDigits": DecimalSpec(args.digits, args.mul_digits).fraction_digits},
+        "stats": {**stats(args.out / "Carry.ttf", args.digits), "maxMulDigits": args.mul_digits, "arithmeticStage": "division", "maxFractionDigits": DecimalSpec(args.digits, args.mul_digits).fraction_digits, "maxDivDigits": DIVISION_SPEC.digits},
         "passes": [
             {"lookup": index, "name": p.name, "title": p.title, "direction": p.direction, "blurb": p.blurb, "distance": p.distance}
             for index, p in zip(calt.Feature.LookupListIndex, passes)
