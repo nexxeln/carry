@@ -19,6 +19,7 @@ CHECKS = [
     ["uv", "run", "generate.py"],
     ["uv", "run", "tests/test_shape.py", "--ops", "+-*×", "--cases", "20000", "--engines", "harfbuzz,coretext,textkit"],
     ["uv", "run", "tests/test_extended.py"],
+    ["uv", "run", "tests/test_render.py"],
     ["uv", "run", "tests/check_install.py"],
     ["node", "tests/browser_test.mjs"],
     ["node", "tests/typing_test.mjs"],

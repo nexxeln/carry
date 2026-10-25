@@ -76,6 +76,8 @@ CoreText re-applies a multiple substitution called from a contextual rule when i
 
 HarfBuzz gives each shaping call a budget of 4,096 operations per input character (at least 65,536) and silently stops applying lookups when it runs out. Every successful contextual match charges the length of its context, except ranges longer than 255 glyphs. A short input that expands into a long line is exactly what the budget guards against. Carry reads zero digits through a context-free fallback rule, so only real digits pay. At the shipped widths, lines of 64 maximum-length sums or products all draw their answers.
 
+Per-operand digit limits do not guarantee arbitrarily long shaping runs. CoreText computes 64 maximum-width sums in one call, but leaves the source unchanged at 512 in the tested build. The independent review reproduced that behavior before division was added as well.
+
 ## macOS font pickers
 
 macOS lists and picks fonts by PostScript name (`Carry-Regular`), and some pickers only show fonts that support the document's language. `tests/check_install.py` runs Apple's `FontValidator` and looks the font up by name. Carry includes printable ASCII so that CoreText reports English among its supported languages.
@@ -94,6 +96,7 @@ If subtraction does not compute in TextEdit, check **Edit → Substitutions → 
 | `tests/browser_test.mjs` | Chromium, Firefox, and WebKit draw every answer, pixel for pixel |
 | `tests/typing_test.mjs` | answers survive typing, deleting, and editing key by key |
 | `tests/hero_test.mjs` | the README caret follows typing, resets on repeat, and respects reduced motion |
+| `tests/test_render.py` | syntax glyph variants keep readable labels in the generated shaping diagrams |
 | `tests/playground_test.mjs` | real example answers, display modes, source text, keyboard focus, mobile layout, and missing-font behavior work in all three browsers |
 | fontbakery | `check-universal` reports no failures |
 

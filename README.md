@@ -84,8 +84,8 @@ Answers are visual glyphs, not inserted characters. Copying, saving, and screen 
 ## How it works
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/passes-dark.svg">
-  <img src="docs/images/passes-light.svg" alt="The glyphs for 128+256= after each pass: typed, pad, slots, read b, read a, sign, carry, and show.">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/passes-dark.svg?v=2">
+  <img src="docs/images/passes-light.svg?v=2" alt="The glyphs for 128+256= after each pass: typed, answer recognition, restore, pad, slots, read b, read a, sign, carry, and show.">
 </picture>
 
 Each row is the line after one substitution pass, taken from a HarfBuzz trace. Carry pads both numbers with invisible zeros until every digit sits a fixed distance from the answer slot that reads it, then a lookup that runs right to left ripples the carries. The display at the top is built the same way: each frame lights the dots HarfBuzz returns for the text typed so far.

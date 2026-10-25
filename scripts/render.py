@@ -102,7 +102,12 @@ def hero_svg(font: Path) -> str:
 def label(name: str) -> tuple[str, str]:
     """(big text, tone) for a glyph name in the trace."""
     digits = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
-    symbols = {"plus": "+", "hyphen": "-", "minus": "−", "equal": "=", "asterisk": "*", "multiply": "×", "space": "␣"}
+    symbols = {"plus": "+", "hyphen": "-", "minus": "−", "equal": "=", "asterisk": "*", "multiply": "×", "slash": "/", "divide": "÷", "period": ".", "comma": ",", "space": "␣", "uni00A0": "␣"}
+    if name.startswith(("pending.", "tail.", "syntax.", "boundary.", "invalid.", "answered.", "neg.")):
+        text, _ = label(name.split(".", 1)[1])
+        return text, "work"
+    if name.startswith("dec.") and name[4:] in symbols:
+        return symbols[name[4:]], "work"
     if name in digits:
         return str(digits.index(name)), "fg"
     if name in symbols:
@@ -110,12 +115,12 @@ def label(name: str) -> tuple[str, str]:
     if name in ("pad", "blank"):
         return "0", "dim"
     if name.startswith("res."):
-        return ("-" if name == "res.minus" else name[4:]), "accent"
+        return ("-" if name == "res.minus" else symbols.get(name[4:], name[4:])), "accent"
     if name.startswith("slot."):
         return "_", "work"
     if name.startswith(("b.", "col.")):
         return name.split(".")[1].replace("m", "-"), "work"
-    if name.startswith("d"):
+    if name.startswith("d") and name[1:2].isdigit():
         return name[1], "work"
     return name, "work"
 

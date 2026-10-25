@@ -40,7 +40,7 @@ A[n-1] … A[0]   op   B[n-1] … B[0]   =   C   R[n-1] … R[0]
 
 Answer slot `R[j]` finds `B[j]` exactly n + 2 non-skipped glyphs to its left, and `A[j]` exactly 2n + 3 non-skipped glyphs to its left, for every column and every pair of input lengths. Fetching the matching digit becomes a fixed-length context, which one chaining rule can match.
 
-![The glyph stream after each pass for 128+256=, from a HarfBuzz trace of a 4-digit build](images/passes-dark.svg)
+![The glyph stream after each pass for 128+256=, from a HarfBuzz trace of a 4-digit build](images/passes-dark.svg?v=2)
 
 ## The passes
 
