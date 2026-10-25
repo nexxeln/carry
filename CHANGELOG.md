@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Exact decimal addition, subtraction, and multiplication with two fractional input places. Limits apply to the integer part; output trims trailing fractional zeros and never rounds.
 - Signed operands and spacing around arithmetic operators and before `=`, with original text outlines and advances preserved.
 - Existing signed or spaced answers suppress generated results, including during incremental editing.
 - Extended shaping, browser rendering, and editing regression checks. Browser-specific whitespace limitations are documented in [Engines](docs/engines.md#spaces-in-browser-text).

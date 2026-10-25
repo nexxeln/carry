@@ -48,6 +48,9 @@ On the web, serve `dist/Carry.woff2` and keep the rules switched on:
 | `128 + 256 =` | `128 + 256 =384` |
 | `-5--7=` | `-5--7=2` |
 | `5×-7=` | `5×-7=-35` |
+| `12.50+3.75=` | `12.50+3.75=16.25` |
+| `0.1+0.2=` | `0.1+0.2=0.3` |
+| `19.99×3=` | `19.99×3=59.97` |
 | `12+3=15` | nothing extra, because the answer is already there |
 | `x2+3=` | nothing extra, because `x2` is a name, not a number |
 
@@ -55,7 +58,9 @@ Operands accept one unary `+`, `-`, or `−`. Spaces are allowed around operator
 
 Use ASCII spaces for portable expressions. Firefox does not support non-breaking spaces reliably. WebKit draws spaced inline text correctly but can measure its width incorrectly. See [Engines](docs/engines.md#spaces-in-browser-text) for supported browser uses and canvas settings.
 
-When Carry can't be sure of an answer, it draws nothing rather than a wrong one. It doesn't divide or read decimals.
+Decimal operands accept up to two fractional digits, with up to 16 integer digits for addition/subtraction and 8 for multiplication. Results are exact, never rounded. Unneeded trailing fractional zeros disappear, so `1.20+1.30=` draws `2.5`; products can have up to four fractional digits. A decimal point needs digits on both sides. `.5` and `1.` are unsupported.
+
+When Carry can't be sure of an answer, it draws nothing rather than a wrong one. It doesn't divide.
 
 ## How it works
 

@@ -7,7 +7,6 @@
 import argparse
 import json
 import math
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from fontTools.agl import UV2AGL
@@ -18,12 +17,12 @@ from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib.tables import ttProgram
 from fontTools.ttLib import TTFont, newTable
 
+from decimal_features import DecimalMachine, DecimalSpec
+from font_model import ADVANCE, DOT, Glyph, Pass, cls, sv
 from pixels import BITMAPS
 
 UPM = 1000
-ADVANCE = 600
 CELL = 100
-DOT = 86
 GHOST_DOT = 36
 
 # CoreText (macOS 27) re-applies a multiple substitution that a contextual rule
@@ -60,10 +59,6 @@ COL_VALUES = range(-18, 19)
 SIGNS = ("z", "p", "n")
 CARRIES = (-1, 0, 1)
 VAL_VALUES = range(0, 91)
-
-
-def sv(v: int) -> str:
-    return f"m{-v}" if v < 0 else str(v)
 
 
 def b_name(v: int) -> str:
@@ -114,17 +109,6 @@ def mc_name(d: int, c: int) -> str:
     return f"mc{d}.c{c}"
 
 
-@dataclass(frozen=True)
-class Glyph:
-    name: str
-    role: str
-    bitmap: tuple[str, ...] = ()
-    dot: int = DOT
-    width: int = 0
-    char: str | None = None
-    meta: dict = field(default_factory=dict, hash=False)
-
-
 def inventory(debug: bool) -> list[Glyph]:
     """Every glyph in the font, in glyph-ID order. Each stage of the machine owns one family."""
     glyphs = [Glyph(".notdef", "text", tuple(["#####", "#...#", "#...#", "#...#", "#...#", "#...#", "#####"]), width=ADVANCE)]
@@ -144,7 +128,7 @@ def inventory(debug: bool) -> list[Glyph]:
     for name in ("space", "uni00A0"):
         glyphs.append(Glyph(f"boundary.{name}", "text", width=ADVANCE, meta={"text": SYMBOLS[name]}))
         glyphs.append(Glyph(f"invalid.{name}", "text", width=ADVANCE, meta={"text": SYMBOLS[name]}))
-    for prefix, originals in (("pending", DIGITS + ["space", "uni00A0"]), ("tail", ["space", "uni00A0", "plus", "hyphen", "minus"]), ("answered", ["equal"])):
+    for prefix, originals in (("pending", DIGITS + ["space", "uni00A0", "period"]), ("tail", ["space", "uni00A0", "plus", "hyphen", "minus"]), ("answered", ["equal"])):
         for name in originals:
             char = str(DIGITS.index(name)) if name in DIGITS else SYMBOLS[name]
             glyphs.append(Glyph(f"{prefix}.{name}", "text", tuple(BITMAPS[DRAWING.get(name, char)]), width=ADVANCE, meta={"text": char}))
@@ -176,20 +160,6 @@ def inventory(debug: bool) -> list[Glyph]:
     return glyphs
 
 
-@dataclass(frozen=True)
-class Pass:
-    name: str
-    title: str
-    direction: str
-    blurb: str
-    body: list[str]
-    distance: int | None = None
-
-
-def cls(names) -> str:
-    return "[" + " ".join(names) + "]"
-
-
 def rule(*parts: str) -> str:
     return " ".join(p for p in parts if p)
 
@@ -216,8 +186,10 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
     padded to twice their real width.
     """
     any_glyph = "@ANY"
+    decimal = DecimalMachine(DecimalSpec(n, m), DIGITS, {dig_name(*s): s for s in DIG_STATES}, PADS_PER_PASS)
     wildcards = lambda count: " ".join([any_glyph] * count)
     lookups: list[str] = ["lookup keep { sub @JOINED by @JOINED; } keep;"]
+    lookups += decimal.lookups()
 
     for k in range(1, min(max(n, 2 * m), PADS_PER_PASS + 1)):
         rules = " ".join(f"sub {d} by {' '.join(['pad'] * k)} {d};" for d in DIGITS + [f"neg.{d}" for d in DIGITS])
@@ -286,8 +258,8 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
     mul_negative = " ".join(["pad"] * m + ["@NEGPAD"] * (m - 1) + ["@NEGDIGIT"])
     slot_rules = [
         "ignore sub equal' [@PADDED @WORD period comma @OP equal answered.equal];",
-        f"ignore sub [@DIGIT @WORD @OP equal period comma invalid.space invalid.uni00A0] {padded(n)} @ADDOP {padded(n)} equal';",
-        f"ignore sub [@DIGIT @WORD @OP equal period comma invalid.space invalid.uni00A0] {padded(2 * m)} @MULOP {padded(2 * m)} equal';",
+        f"ignore sub [@DIGIT @WORD @OP equal dec.equal period comma invalid.space invalid.uni00A0] {padded(n)} @ADDOP {padded(n)} equal';",
+        f"ignore sub [@DIGIT @WORD @OP equal dec.equal period comma invalid.space invalid.uni00A0] {padded(2 * m)} @MULOP {padded(2 * m)} equal';",
         f"sub {padded(n)} plus {padded(n)} equal' lookup expand_add;",
         f"sub {padded(n)} [hyphen minus] {padded(n)} equal' lookup expand_sub;",
         # An operand of up to m digits always starts with at least m pads. Requiring
@@ -309,7 +281,7 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
     read_a.append("sub @COLB' lookup add_a0;")
 
     sign_rules = [
-        "sub [equal @SIGZ] @COL' lookup sign_z;",
+        "sub [equal dec.equal @SIGZ] @COL' lookup sign_z;",
         "sub @SIGP @COL' lookup sign_p;",
         "sub @SIGN @COL' lookup sign_n;",
     ]
@@ -369,15 +341,16 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
     syntax_passes = [
         Pass("answer_tail", "recognize an existing answer", "rtl", "distinguish a spaced answer from the next complete expression", [
             f"rsub @POSDIGIT' [@OP equal @PENDING] by {cls('pending.' + d for d in DIGITS)};",
+            "rsub period' @PENDING by pending.period;",
             "rsub [space uni00A0]' [@OP equal @PENDING] by [pending.space pending.uni00A0];",
-            "rsub @ADDOP' [@POSDIGIT @TAIL] by [tail.plus tail.hyphen tail.minus];",
-            "rsub [space uni00A0]' [@POSDIGIT @WORD @TAIL] by [tail.space tail.uni00A0];",
+            "rsub @ADDOP' [@POSDIGIT @TAIL period] by [tail.plus tail.hyphen tail.minus];",
+            "rsub [space uni00A0]' [@POSDIGIT @WORD @TAIL period] by [tail.space tail.uni00A0];",
         ]),
         Pass("answered", "leave answered expressions alone", "ltr", "an existing signed or spaced answer blocks expansion", [
             "sub equal' lookup answered [@POSDIGIT @TAIL];",
         ]),
         Pass("restore_tail", "restore lexical probes", "ltr", "the lookahead leaves all original text untouched", [
-            *[f"sub pending.{name} by {name};" for name in DIGITS + ["space", "uni00A0"]],
+            *[f"sub pending.{name} by {name};" for name in DIGITS + ["space", "uni00A0", "period"]],
             *[f"sub tail.{name} by {name};" for name in ["space", "uni00A0", "plus", "hyphen", "minus"]],
         ]),
         Pass("spaces_left", "recognize spaces before punctuation", "rtl", "only operator-adjacent spaces can be skipped", [
@@ -398,10 +371,12 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
             "sub [@OP syntax.space syntax.uni00A0] [boundary.space boundary.uni00A0]' by [syntax.space syntax.uni00A0];",
         ]),
         Pass("negative_digits", "retain operand polarity", "ltr", "propagate the unary minus through contiguous digits", [
+            "sub @NEGDIGIT period @POSDIGIT' lookup negate;",
             "sub @NEGDIGIT @POSDIGIT' lookup negate;",
         ]),
         Pass("number_boundaries", "reject a split first operand", "ltr", "a completed right operand may delimit the next expression, but a bare number may not", [
             *[f"ignore sub @OP {digits(k)} [space uni00A0]';" for k in range(1, max(n, m) + 1)],
+            *[f"ignore sub @OP {digits(k)} period {digits(f)} [space uni00A0]';" for k in range(1, max(n, m) + 1) for f in range(1, decimal.spec.fraction_digits + 1)],
             "sub [@DIGIT invalid.space invalid.uni00A0] [space uni00A0]' by [invalid.space invalid.uni00A0];",
         ]),
     ]
@@ -409,7 +384,7 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
         Pass("join", "hold the expression together", "ltr",
               "adjacent digits, operators, equals signs, and ASCII/NBSP spaces are replaced by themselves before parsing. the engine must reshape the whole expression when an answer is typed or edited.",
              join_rules),
-    ] + syntax_passes + [
+    ] + syntax_passes + decimal.normalization_passes() + [
         Pass("pad" if i == 0 else f"pad{i + 1}", "pad both operands", "ltr",
              f"each operand's first digit looks ahead to count its own length, then a multiple substitution inserts zero-width zeros so every operand is exactly {n} glyphs long ({2 * m} for multiplication).",
              rules)
@@ -424,6 +399,7 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
         Pass("read_a", "add the A digit", "ltr",
              f"every slot grabs the digit {2 * n + 3} glyphs to its left, the matching digit of A, and adds it. now each slot holds a column total from -18 to 18.",
              read_a, 2 * n + 3),
+        *decimal.addition_passes(),
         Pass("sign", "find the sign", "ltr",
              "left to right, each slot copies the sign of the first nonzero column before it. the last slot ends up knowing whether the whole answer is negative.",
              sign_rules),
@@ -431,6 +407,8 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
              "a reverse chaining lookup walks right to left. each slot reads the carry its right neighbour just produced, settles into one digit, and passes its own carry left.",
              carry_rules),
         *row_passes,
+        *decimal.multiplication_passes(),
+        *decimal.presentation_passes(),
         Pass("mul_sign", "draw the product sign", "ltr", "negative zero remains zero", mul_sign_rules),
         Pass("overflow_sign", "draw a full-width negative sum", "ltr", "a negative sum may need both a leading digit and a minus", [
             f"sub equal {cls(negative_nonzeros)}' lookup overflow_minus;",
@@ -447,13 +425,13 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
         "@DIGIT = [@POSDIGIT @NEGDIGIT];",
         "@POSPAD = [@POSDIGIT pad];",
         "@NEGPAD = [@NEGDIGIT pad];",
-        f"@PENDING = {cls('pending.' + d for d in DIGITS + ['space', 'uni00A0'])};",
+        f"@PENDING = {cls('pending.' + d for d in DIGITS + ['space', 'uni00A0', 'period'])};",
         "@TAIL = [tail.space tail.uni00A0 tail.plus tail.hyphen tail.minus];",
         "@PADDED = [@DIGIT pad];",
         "@ADDOP = [plus hyphen minus];",
         "@MULOP = [asterisk multiply];",
-        "@OP = [@ADDOP @MULOP];",
-        "@JOINED = [@DIGIT @OP equal space uni00A0];",
+        "@OP = [@ADDOP @MULOP dec.plus dec.hyphen dec.minus dec.asterisk dec.multiply];",
+        "@JOINED = [@DIGIT @OP equal space uni00A0 period];",
         # A digit glued to a letter or underscore is part of a name like x2 or 0x1F, not a number.
         f"@WORD = {cls([UV2AGL[c] for c in [*range(0x41, 0x5B), *range(0x61, 0x7B), 0x5F]])};",
         *[f"@VAL{d} = [{DIGITS[d]} neg.{DIGITS[d]}{' pad' if d == 0 else ''}];" for d in range(10)],
@@ -466,15 +444,16 @@ def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
         f"@ACCB = {cls(accb_name(r, b) for b in range(10) for r in range(10))};",
         f"@VALS = {cls(every_val)};",
     ]
+    classes += decimal.declarations()
 
     fea = ["languagesystem DFLT dflt;", "languagesystem latn dflt;", "", *classes, ""]
     fea += lookups
-    fea.append("table GDEF { GlyphClassDef , [syntax.space syntax.uni00A0 syntax.plus syntax.hyphen syntax.minus mul.negative], , ; } GDEF;")
+    fea.append("table GDEF { GlyphClassDef , [syntax.space syntax.uni00A0 syntax.plus syntax.hyphen syntax.minus mul.negative dec.period dec.mul.negative], , ; } GDEF;")
     fea += ["", "feature calt {"]
     for p in passes:
         fea.append(f"  # {p.title}: {p.blurb}")
         fea.append(f"  lookup {p.name.upper()} {{")
-        if p.name not in ("answer_tail", "answered", "restore_tail", "spaces_left", "spaces_right", "unary_boundary", "unary_spacing", "mul_sign"):
+        if p.name not in ("answer_tail", "answered", "restore_tail", "spaces_left", "spaces_right", "unary_boundary", "unary_spacing", "mul_sign", "dec_product_sign"):
             fea.append("    lookupflag IgnoreLigatures;")
         else:
             fea.append("    lookupflag 0;")
@@ -550,6 +529,7 @@ def assemble(family: str, glyphs: list[Glyph], drawings: dict, fea: str) -> TTFo
 
 def build_carry(n: int, m: int, debug: bool) -> tuple[TTFont, str, list[Pass], list[Glyph]]:
     glyphs = inventory(debug)
+    glyphs += DecimalMachine(DecimalSpec(n, m), DIGITS, {dig_name(*s): s for s in DIG_STATES}).inventory()
     fea, passes = features(n, m, [g.name for g in glyphs])
     family = "Carry Debug" if debug else "Carry"
     font = assemble(family, glyphs, {g.name: draw(g) for g in glyphs}, fea)
@@ -622,7 +602,7 @@ def main() -> None:
 
     calt = next(f for f in font["GSUB"].table.FeatureList.FeatureRecord if f.FeatureTag == "calt")
     meta = {
-        "stats": {**stats(args.out / "Carry.ttf", args.digits), "maxMulDigits": args.mul_digits, "arithmeticStage": "syntax"},
+        "stats": {**stats(args.out / "Carry.ttf", args.digits), "maxMulDigits": args.mul_digits, "arithmeticStage": "decimals", "maxFractionDigits": DecimalSpec(args.digits, args.mul_digits).fraction_digits},
         "passes": [
             {"lookup": index, "name": p.name, "title": p.title, "direction": p.direction, "blurb": p.blurb, "distance": p.distance}
             for index, p in zip(calt.Feature.LookupListIndex, passes)

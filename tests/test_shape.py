@@ -51,7 +51,7 @@ def cases(n: int, m: int, ops: str, count: int, seed: int, fraction_digits: int 
         ("5=", "5="),
         ("=", "="),
         ("+=", "+="),
-        ("1.5+2=", "1.5+2=3.5" if fraction_digits and n >= 2 else "1.5+2="),
+        ("1.5+2=", "1.5+2=3.5" if fraction_digits else "1.5+2="),
         ("= 1+2=", "= 1+2=3"),
         ("x = 2+3=", "x = 2+3=5"),
         ("(2+3=", "(2+3=5"),

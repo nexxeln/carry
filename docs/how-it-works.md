@@ -128,6 +128,18 @@ Leading zeros become zero-width `blank` glyphs, the carry slot of a negative ans
   <img src="images/hidden-light.svg" alt="128+256=384 in Carry Debug, with the padding zeros and the blank answer slots drawn faintly.">
 </picture>
 
+## Exact decimals
+
+Decimal expressions use `DecimalSpec` and `DecimalMachine` in `decimal_features.py`. The shared `Glyph` and `Pass` records live in `font_model.py`. Expressions without a decimal point keep the original integer layout.
+
+The decimal machine recognizes each operand's format independently. A decimal operator selects the wider layout, and hidden zeros align both operands to two fractional places. Source digits and decimal points keep their original outlines and advances; tagged points become skippable ligatures only after padding.
+
+For example, `1.2+0.03=` computes integer coefficients 120 and 3, then displays coefficient 123 at scale two as `1.23`. The addition layout has 18 columns for 16 integer and two fractional digits. Multiplication allows ten coefficient digits per operand, so its result has scale four. `1.25×0.4=` computes 125 × 40 = 5000 and displays `0.5`.
+
+End markers fix the result's radix position before formatting removes zeros. Output passes distinguish integer, units, and fractional columns. They retain the units zero in a fraction, remove only trailing fractional zeros, and hide the point when no fractional digits remain. The sign passes suppress negative zero. No rounding or floating-point arithmetic occurs.
+
+Numbers require digits on both sides of a decimal point. Inputs with more than two fractional digits or too many integer digits draw no result.
+
 ## Multiplication
 
 Long multiplication, one row per digit of B, three passes per row:

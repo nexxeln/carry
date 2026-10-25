@@ -22,6 +22,7 @@ import { chromium, firefox, webkit } from "playwright"
 
 const root = new URL("..", import.meta.url).pathname
 const out = join(root, "build/browser")
+const arithmetic = JSON.parse(readFileSync(join(root, "build/carry.json"))).stats
 mkdirSync(out, { recursive: true })
 
 execFileSync("uv", ["run", "python", "-c", `
@@ -141,6 +142,17 @@ for (const [name, engine] of [["chromium", chromium], ["firefox", firefox], ["we
     ["-5--7=", "-5--7=2"],
   ]
   if (name !== "firefox") examples.push(["1\u00a0+\u00a02\u00a0=", "1\u00a0+\u00a02\u00a0=3"])
+  if (arithmetic.maxFractionDigits) examples.push(
+    ["0.1 + 0.2 =", "0.1 + 0.2 =0.3"],
+    ["19.99×3=", "19.99×3=59.97"],
+    ["0.01×0.01=", "0.01×0.01=0.0001"],
+    ["1.2+3.4= -4.6", "1.2+3.4= -4.6"],
+  )
+  if (arithmetic.maxDivDigits) examples.push(
+    ["17/5=", "17/5=3 r 2"],
+    ["-17 ÷ 5 =", "-17 ÷ 5 =-3 r -2"],
+    ["5/0=", "5/0="],
+  )
   for (const [typed, want] of examples) {
     const draw = async (family, text) => {
       await dom.evaluate((node, { family, text }) => {
