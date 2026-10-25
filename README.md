@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/hero.svg" width="720" alt="An LED display typing 128+256= in Carry. When the = is typed, 384 appears.">
+  <img src="docs/images/hero.svg?v=2" width="720" alt="An LED display typing 128+256= in Carry. When the = is typed, 384 appears.">
 </p>
 
 <h1 align="center">Carry</h1>
