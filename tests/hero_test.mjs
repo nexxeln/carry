@@ -6,6 +6,19 @@ for (const [name, engine] of [["chromium", chromium], ["firefox", firefox], ["we
   try {
     const page = await browser.newPage()
     await page.goto(new URL("../docs/images/hero.svg", import.meta.url).href)
+    const carets = await page.locator(".caret").evaluateAll((nodes) => nodes.map((node) => ({
+      tag: node.tagName,
+      fill: getComputedStyle(node).fill,
+      animation: getComputedStyle(node).animationName,
+      opacity: getComputedStyle(node).opacity,
+      width: node.getBBox().width.toFixed(1),
+      height: node.getBBox().height.toFixed(1),
+      fits: node.getBBox().x + node.getBBox().width < node.ownerSVGElement.viewBox.baseVal.width,
+    })))
+    assert.equal(carets.length, 9)
+    for (const caret of carets) {
+      assert.deepEqual(caret, { tag: "rect", fill: "rgb(255, 107, 53)", animation: "none", opacity: "1", width: "56.8", height: "80.8", fits: true })
+    }
     const positions = await page.evaluate(async () => {
       const animations = document.getAnimations()
       const result = []

@@ -61,7 +61,7 @@ def hero_svg(font: Path) -> str:
     frames = [lit_cells(font, p, bitmaps) for p in prefixes]
     ends = [len(p) * 6 for p in prefixes]
     ends[-1] = max(c for c, _ in frames[-1]) + 2
-    cols = ends[-1] + 3 + 2 * MARGIN
+    cols = ends[-1] + 7 + 2 * MARGIN
     rows = 7 + 2 * MARGIN
     width, height = cols * PITCH, rows * PITCH
 
@@ -75,20 +75,19 @@ def hero_svg(font: Path) -> str:
     key, hold, rest = 0.16, 3.2, 0.5
     total = key * len(frames) + hold + rest
     css, groups = [], []
+    caret = f'class="caret" fill="#ff6b35" y="{MARGIN * PITCH + PITCH / 2 - RADIUS:.1f}" width="{4 * PITCH + 2 * RADIUS}" height="{6 * PITCH + 2 * RADIUS}"'
     for i, cells in enumerate(frames):
         start = key * (i + 1) / total * 100
         stop = (key * (i + 2) if i < len(frames) - 1 else key * len(frames) + hold) / total * 100
         css.append(f"@keyframes f{i}{{0%,{start - 0.01:.2f}%{{opacity:0}}{start:.2f}%,{stop - 0.01:.2f}%{{opacity:1}}{stop:.2f}%,100%{{opacity:0}}}}"
                    f".f{i}{{animation:f{i} {total:.2f}s infinite}}")
-        caret = {(ends[i] + 1, r) for r in range(7)}
         groups.append(f'<g class="frame f{i}{" last" if i == len(frames) - 1 else ""}"><path class="lit" d="{dots(cells)}"/>'
-                      f'<path class="caret" fill-opacity="0.55" d="{dots(caret)}"/></g>')
+                      f'<rect {caret} x="{(ends[i] + 1 + MARGIN) * PITCH + PITCH / 2 - RADIUS:.1f}"/></g>')
     start, stop = key / total * 100, (key * len(frames) + hold) / total * 100
     css.append(f"@keyframes blank{{0%,{start - 0.01:.2f}%{{opacity:1}}{start:.2f}%,{stop - 0.01:.2f}%{{opacity:0}}{stop:.2f}%,100%{{opacity:1}}}}"
                f".blank{{animation:blank {total:.2f}s infinite}}")
-    groups.append(f'<g class="frame blank"><path class="caret" fill-opacity="0.55" d="{dots({(0, r) for r in range(7)})}"/></g>')
-    css.append(f"@keyframes caret{{0%,49%{{opacity:1}}50%,100%{{opacity:0}}}}.caret{{animation:caret 1s steps(1) infinite}}")
-    css.append("@media (prefers-reduced-motion:reduce){.frame{animation:none;opacity:0}.last{opacity:1}.caret{animation:none}}")
+    groups.append(f'<g class="frame blank"><rect {caret} x="{MARGIN * PITCH + PITCH / 2 - RADIUS:.1f}"/></g>')
+    css.append("@media (prefers-reduced-motion:reduce){.frame{animation:none;opacity:0}.last{opacity:1}}")
     unlit = {(c, r) for c in range(cols - 2 * MARGIN) for r in range(7)}
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-label="An LED display typing 128+256= in Carry. When the = is typed, 384 appears.">
 <style>.frame{{fill:#f7f2e4;opacity:0}}{"".join(css)}</style>
