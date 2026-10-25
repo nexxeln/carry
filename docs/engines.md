@@ -93,6 +93,8 @@ If subtraction does not compute in TextEdit, check **Edit → Substitutions → 
 | `tests/check_install.py` | Apple's `FontValidator` passes and macOS finds the font by name |
 | `tests/browser_test.mjs` | Chromium, Firefox, and WebKit draw every answer, pixel for pixel |
 | `tests/typing_test.mjs` | answers survive typing, deleting, and editing key by key |
+| `tests/hero_test.mjs` | the README caret follows typing, resets on repeat, and respects reduced motion |
+| `tests/playground_test.mjs` | real example answers, display modes, source text, keyboard focus, mobile layout, and missing-font behavior work in all three browsers |
 | fontbakery | `check-universal` reports no failures |
 
 `scripts/sweep.py` measures size and speed at other widths, and `probe/probe.py` reproduces the engine behaviours the design depends on.

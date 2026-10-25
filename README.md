@@ -67,6 +67,20 @@ Division accepts integer operands of up to four digits, including leading zeros.
 
 When Carry can't be sure of an answer, it draws nothing rather than a wrong one.
 
+## Playground
+
+The local playground switches between normal text, Carry, and Carry Debug. It shows the underlying text beside the font-drawn output. JavaScript handles the controls, not the arithmetic.
+
+From the repository root, run:
+
+```bash
+bun run playground
+```
+
+Open <http://127.0.0.1:8000/docs/playground.html>. The font files in `dist/` are ready to use; after changing the generator, rebuild them with `uv run scripts/release.py`.
+
+Answers are visual glyphs, not inserted characters. Copying, saving, and screen readers use the underlying expression without the generated answer. Debug shows internal glyphs, not a step-by-step trace.
+
 ## How it works
 
 <picture>

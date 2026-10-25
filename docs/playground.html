@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Type an expression and let Carry's OpenType rules draw the answer. No JavaScript arithmetic.">
+  <link rel="icon" href="data:,">
+  <title>Carry / Live playground</title>
+  <style>
+    @font-face {
+      font-family: Carry;
+      src: url("../dist/Carry.woff2") format("woff2");
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Carry Debug";
+      src: url("../dist/Carry-Debug.woff2") format("woff2");
+      font-display: block;
+    }
+    :root {
+      --background: #111210;
+      --panel: #191a17;
+      --line: #383a33;
+      --text: #e8e8dd;
+      --muted: #a6a89a;
+      --accent: #ff6b35;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      color: var(--text);
+      background: var(--background);
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, textarea { font: inherit; }
+    button, a, textarea { -webkit-tap-highlight-color: transparent; }
+    a { color: inherit; text-underline-offset: 4px; }
+    a:hover { color: var(--accent); }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
+    main { width: min(1080px, 100% - 80px); margin: 0 auto; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 32px 0; border-bottom: 1px solid var(--line); }
+    .wordmark { font-size: 18px; font-weight: 700; letter-spacing: -.06em; text-decoration: none; }
+    .wordmark::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 12px; background: var(--accent); }
+    .header-note, .eyebrow, .section-label { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+    .header-note { color: var(--muted); }
+    .intro { padding: 58px 0 38px; }
+    .eyebrow { color: var(--accent); margin: 0 0 18px; }
+    h1 { margin: 0 0 20px; font-size: clamp(32px, 5vw, 54px); font-weight: 500; line-height: 1.1; letter-spacing: -.065em; }
+    .intro p:last-child { max-width: 660px; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.8; }
+    .instrument { border: 1px solid var(--line); background: var(--panel); }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 22px; border-bottom: 1px solid var(--line); }
+    .section-label { color: var(--muted); }
+    .modes { display: flex; gap: 4px; }
+    button { cursor: pointer; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 2px; min-height: 40px; padding: 8px 14px; font-size: 12px; }
+    button:hover { color: var(--text); background: #24251f; }
+    .modes button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: #ff6b350a; }
+    .editor { padding: 28px 26px 18px; background: #141511; }
+    .editor label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 20px; }
+    textarea {
+      display: block; width: 100%; min-width: 0; height: 180px; resize: vertical;
+      padding: 8px 2px 16px; border: 0; border-radius: 0; background: transparent;
+      color: var(--accent); caret-color: var(--text); font-family: Carry, monospace;
+      font-size: clamp(32px, 5.6vw, 64px); line-height: 1.5;
+      font-feature-settings: "calt" 1; font-variant-ligatures: contextual;
+      letter-spacing: normal; word-break: keep-all; white-space: pre; overflow: auto;
+    }
+    textarea[data-mode="normal"] { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+    textarea[data-mode="debug"] { font-family: "Carry Debug", monospace; }
+    textarea::selection { color: var(--background); background: var(--accent); }
+    .editor-note { margin: 16px 0 0; font-size: 11px; line-height: 1.7; color: var(--muted); }
+    .source { border-top: 1px solid var(--line); padding: 21px 26px 24px; }
+    .source-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+    .source-heading span:last-child { color: var(--muted); font-size: 11px; }
+    pre { margin: 16px 0 0; min-height: 24px; font: 15px/1.6 "SFMono-Regular", Consolas, "Liberation Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .examples { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 18px 0; border-bottom: 1px solid var(--line); }
+    .examples .section-label { margin-right: 10px; }
+    .examples button { border-color: var(--line); }
+    .examples button span { color: var(--text); margin-left: 10px; }
+    .limits { margin: 20px 0 0; color: var(--muted); font-size: 11px; line-height: 1.9; }
+    .notes { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; padding: 34px 0 40px; }
+    h2 { font-size: 12px; font-weight: 500; margin: 0 0 12px; }
+    .notes p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.9; }
+    code { color: var(--text); font: inherit; }
+    footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; border-top: 1px solid var(--line); padding: 22px 0 36px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+    #font-status[data-state="error"] { color: var(--accent); }
+    @media (max-width: 600px) {
+      main { width: calc(100% - 32px); }
+      header { padding: 22px 0; }
+      .header-note { font-size: 9px; letter-spacing: .04em; }
+      .intro { padding: 38px 0 28px; }
+      .intro p:last-child { font-size: 12px; }
+      .toolbar { padding: 12px; gap: 8px; }
+      .toolbar .section-label { font-size: 9px; letter-spacing: .04em; }
+      .modes { gap: 0; }
+      button { padding: 8px 10px; }
+      .editor { padding: 24px 16px 18px; }
+      textarea { height: 155px; }
+      .source { padding: 20px 16px; }
+      .source-heading { flex-wrap: wrap; gap: 8px; }
+      .examples { gap: 8px; }
+      .examples .section-label { width: 100%; margin: 0 0 4px; }
+      .examples button { flex: 1 1 44%; text-align: left; }
+      .examples button span { display: block; margin: 6px 0 0; }
+      .notes { grid-template-columns: 1fr; gap: 24px; padding: 28px 0; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <a class="wordmark" href="../README.md" aria-label="Carry readme">carry</a>
+      <span class="header-note">An arithmetic typeface</span>
+    </header>
+    <section class="intro" aria-labelledby="title">
+      <p class="eyebrow">Live playground / OpenType GSUB</p>
+      <h1>The font draws the answer.</h1>
+      <p>Type an expression ending in <code>=</code>. Carry's substitution rules draw the result as part of the text. This page does no arithmetic.</p>
+    </section>
+    <section class="instrument" aria-label="Font playground">
+      <div class="toolbar">
+        <span class="section-label">Display mode</span>
+        <div class="modes" role="group" aria-label="Display mode">
+          <button type="button" data-mode="normal" aria-pressed="false">Normal</button>
+          <button type="button" data-mode="carry" aria-pressed="true">Carry</button>
+          <button type="button" data-mode="debug" aria-pressed="false">Debug</button>
+        </div>
+      </div>
+      <div class="editor">
+        <label for="expression">Expression · edit here</label>
+        <textarea id="expression" data-mode="carry" aria-describedby="editor-note copy-note" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off">128+256=</textarea>
+        <p class="editor-note" id="editor-note">Carry displays the expression with font-drawn answers. Long lines scroll horizontally.</p>
+      </div>
+      <div class="source">
+        <div class="source-heading">
+          <span class="section-label" id="source-label">Underlying text</span>
+          <span>What you select, copy, and save</span>
+        </div>
+        <pre id="source" aria-labelledby="source-label">128+256=</pre>
+      </div>
+    </section>
+    <div class="examples" role="group" aria-label="Example expressions">
+      <span class="section-label">Try an example</span>
+      <button type="button" data-expression="128+256=">Unsigned<span>128+256=</span></button>
+      <button type="button" data-expression="-12+5=">Signed<span>-12+5=</span></button>
+      <button type="button" data-expression="1.25+2.5=">Decimals<span>1.25+2.5=</span></button>
+      <button type="button" data-expression="17÷5=">Division<span>17÷5=</span></button>
+    </div>
+    <p class="limits">Addition/subtraction accepts 16 integer digits; multiplication accepts 8. Both accept two fractional places. Integer division accepts four digits and draws a remainder when needed. <a href="engines.md#spaces-in-browser-text">Browser notes</a>.</p>
+    <section class="notes" aria-label="About this playground">
+      <div>
+        <h2>Drawn pixels, unchanged text</h2>
+        <p id="copy-note">The answer is visual, not added text. Copying <code>128+256=</code> still gives you <code>128+256=</code>. Screen readers read the underlying expression, not the drawn answer.</p>
+      </div>
+      <div>
+        <h2>Same string, different font</h2>
+        <p>Normal uses a regular monospace font. Carry applies its arithmetic substitutions. Debug uses Carry's debug font to expose internal glyphs. It is not a step-by-step engine trace. Unsupported expressions may stay as typed.</p>
+      </div>
+    </section>
+    <footer>
+      <span id="font-status" role="status">Loading Carry fonts…</span>
+      <a href="how-it-works.md">How the font works ↗</a>
+    </footer>
+  </main>
+  <script type="module">
+    const input = document.querySelector("#expression")
+    const source = document.querySelector("#source")
+    const note = document.querySelector("#editor-note")
+    const descriptions = {
+      normal: "Normal displays only the underlying text. Long lines scroll horizontally.",
+      carry: "Carry displays the expression with font-drawn answers. Long lines scroll horizontally.",
+      debug: "Debug exposes internal glyphs, not an engine trace. Long lines scroll horizontally.",
+    }
+
+    input.addEventListener("input", () => { source.textContent = input.value })
+
+    for (const button of document.querySelectorAll(".modes button")) {
+      button.addEventListener("click", () => {
+        input.dataset.mode = button.dataset.mode
+        note.textContent = descriptions[button.dataset.mode]
+        for (const mode of document.querySelectorAll(".modes button")) {
+          mode.setAttribute("aria-pressed", String(mode === button))
+        }
+      })
+    }
+
+    for (const button of document.querySelectorAll("[data-expression]")) {
+      button.addEventListener("click", () => {
+        input.value = button.dataset.expression
+        source.textContent = input.value
+        input.focus()
+        input.setSelectionRange(input.value.length, input.value.length)
+        input.scrollLeft = 0
+      })
+    }
+
+    const status = document.querySelector("#font-status")
+    try {
+      await Promise.all([document.fonts.load("32px Carry"), document.fonts.load('32px "Carry Debug"')])
+      status.textContent = "Fonts loaded / Arithmetic by OpenType only"
+      status.dataset.state = "ready"
+    } catch {
+      status.textContent = "Font unavailable. Serve this page with both font files in dist/."
+      status.dataset.state = "error"
+    }
+  </script>
+</body>
+</html>

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A local playground with normal, Carry, and Debug modes, an underlying-text display, and packaged Carry Debug WOFF2.
 - Four-digit signed integer division with `/` or `÷`, exact quotient/remainder output, and guards for zero divisors and unsupported decimal division.
 - Exact decimal addition, subtraction, and multiplication with two fractional input places. Limits apply to the integer part; output trims trailing fractional zeros and never rounds.
 - Signed operands and spacing around arithmetic operators and before `=`, with original text outlines and advances preserved.

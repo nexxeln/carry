@@ -608,6 +608,8 @@ def main() -> None:
     font.flavor = None
     debug_font, *_ = build_carry(args.digits, args.mul_digits, debug=True)
     debug_font.save(args.out / "Carry-Debug.ttf")
+    debug_font.flavor = "woff2"
+    debug_font.save(args.out / "Carry-Debug.woff2")
     build_v0().save(args.out / "Carry-v0.ttf")
 
     calt = next(f for f in font["GSUB"].table.FeatureList.FeatureRecord if f.FeatureTag == "calt")

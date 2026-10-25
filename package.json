@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "playground": "uv run python -m http.server 8000 --bind 127.0.0.1",
     "test:browsers": "node tests/browser_test.mjs",
+    "test:playground": "node tests/playground_test.mjs",
     "test:typing": "node tests/typing_test.mjs"
   },
   "devDependencies": {
