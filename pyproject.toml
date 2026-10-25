@@ -1,0 +1,17 @@
+[project]
+name = "carry"
+version = "1.0.0"
+description = "A font that does arithmetic with OpenType substitution rules"
+readme = "README.md"
+license = "MIT AND OFL-1.1"
+authors = [{ name = "Shoubhit Dash" }]
+requires-python = ">=3.12"
+dependencies = [
+    "brotli>=1.2.1",
+    "fonttools>=4.55",
+]
+
+[dependency-groups]
+dev = [
+    "opentype-sanitizer>=9.2.0",
+]

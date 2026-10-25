@@ -1,0 +1,547 @@
+"""Generate Carry, a font that does arithmetic with GSUB substitutions and nothing else.
+
+    uv run generate.py                              # writes build/Carry.ttf, Carry-Debug.ttf, Carry-v0.ttf, carry.json
+    uv run generate.py --digits 6 --mul-digits 4    # narrower operands
+"""
+
+import argparse
+import json
+import math
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from fontTools.agl import UV2AGL
+from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+from fontTools.fontBuilder import FontBuilder
+from fontTools.misc.timeTools import timestampFromString
+from fontTools.pens.ttGlyphPen import TTGlyphPen
+from fontTools.ttLib.tables import ttProgram
+from fontTools.ttLib import TTFont, newTable
+
+from pixels import BITMAPS
+
+UPM = 1000
+ADVANCE = 600
+CELL = 100
+DOT = 86
+GHOST_DOT = 36
+
+# CoreText (macOS 27) re-applies a multiple substitution that a contextual rule
+# calls when it puts more than 64 glyphs in front of the matched glyph, and the
+# line fills with hundreds of copies. Plain multiple substitutions, and ones
+# that append after the matched glyph, are fine at any length. So padding
+# inserts at most 63 pads (plus the digit itself) per pass. See JOURNAL.md.
+PADS_PER_PASS = 63
+
+VERSION = "1.000"
+AUTHOR = "Shoubhit Dash"
+LICENSE = "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org"
+
+# A fixed head timestamp, so rebuilding from the same source gives identical bytes.
+BUILT = timestampFromString("Sat Oct 24 00:00:00 2026")
+
+DIGITS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+SYMBOLS = {
+    "plus": "+",
+    "hyphen": "-",
+    "minus": "−",
+    "equal": "=",
+    "asterisk": "*",
+    "multiply": "×",
+    "period": ".",
+    "comma": ",",
+    "space": " ",
+    "uni00A0": "\u00a0",
+}
+DRAWING = {"minus": "-", "uni00A0": " "}
+
+B_VALUES = range(-9, 10)
+COL_VALUES = range(-9, 19)
+SIGNS = ("z", "p", "n")
+CARRIES = (-1, 0, 1)
+VAL_VALUES = range(0, 91)
+
+
+def sv(v: int) -> str:
+    return f"m{-v}" if v < 0 else str(v)
+
+
+def b_name(v: int) -> str:
+    return f"b.{sv(v)}"
+
+
+def col_name(v: int) -> str:
+    return f"col.{sv(v)}"
+
+
+def sig_name(v: int, s: str) -> str:
+    return f"col.{sv(v)}.{s}"
+
+
+def dig_name(d: int, c: int, s: str) -> str:
+    return f"d{d}.c{ {-1: 'm', 0: '0', 1: '1'}[c] }.{s}"
+
+
+def sign_of(v: int) -> str:
+    return "z" if v == 0 else "p" if v > 0 else "n"
+
+
+def settle(v: int, sign: str, carry_in: int) -> tuple[int, int, str]:
+    """A column holding v, with carry_in from the right, becomes one digit and a carry out.
+
+    A negative answer negates every column, so the carry stays between -1 and 1.
+    """
+    e = (-v if sign == "n" else v) + carry_in
+    return e % 10, max(-1, min(1, e // 10)), sign
+
+
+# Only the states the rules can produce. A zero column is the only undecided
+# one, and a negative answer only carries +1 out of a column that settles to 10.
+SIG_STATES = [(0, "z")] + [(v, s) for s in ("p", "n") for v in COL_VALUES]
+DIG_STATES = sorted(
+    {settle(v, s, c) for v in COL_VALUES for s in ("p", "n") for c in CARRIES},
+    key=lambda t: (t[2] == "n", t[1], t[0]),
+)
+
+
+def accb_name(r: int, b: int) -> str:
+    return f"acc{r}.b{b}"
+
+
+def val_name(v: int) -> str:
+    return f"val.{v}"
+
+
+def mc_name(d: int, c: int) -> str:
+    return f"mc{d}.c{c}"
+
+
+@dataclass(frozen=True)
+class Glyph:
+    name: str
+    role: str
+    bitmap: tuple[str, ...] = ()
+    dot: int = DOT
+    width: int = 0
+    char: str | None = None
+    meta: dict = field(default_factory=dict, hash=False)
+
+
+def inventory(debug: bool) -> list[Glyph]:
+    """Every glyph in the font, in glyph-ID order. Each stage of the machine owns one family."""
+    glyphs = [Glyph(".notdef", "text", tuple(["#####", "#...#", "#...#", "#...#", "#...#", "#...#", "#####"]), width=ADVANCE)]
+    for d, name in enumerate(DIGITS):
+        glyphs.append(Glyph(name, "digit", tuple(BITMAPS[str(d)]), width=ADVANCE, char=str(d), meta={"value": d}))
+    for name, char in SYMBOLS.items():
+        glyphs.append(Glyph(name, "text", tuple(BITMAPS[DRAWING.get(name, char)]), width=ADVANCE, char=char, meta={"text": char}))
+
+    ghost_zero = tuple(BITMAPS["0"]) if debug else ()
+    hidden_width = ADVANCE if debug else 0
+    glyphs.append(Glyph("pad", "pad", ghost_zero, GHOST_DOT, hidden_width, meta={"value": 0}))
+    glyphs.append(Glyph("blank", "blank", ghost_zero, GHOST_DOT, hidden_width, meta={"value": 0}))
+
+    for op in ("add", "sub"):
+        glyphs.append(Glyph(f"slot.{op}", "slot", meta={"op": op}))
+    glyphs += [Glyph(b_name(v), "colb", meta={"value": v}) for v in B_VALUES]
+    glyphs += [Glyph(col_name(v), "col", meta={"value": v}) for v in COL_VALUES]
+    glyphs += [Glyph(sig_name(v, s), "sign", meta={"value": v, "sign": s}) for v, s in SIG_STATES]
+    glyphs += [Glyph(dig_name(d, c, s), "carry", meta={"value": d, "carry": c, "sign": s}) for d, c, s in DIG_STATES]
+    glyphs += [Glyph(accb_name(r, b), "accb", meta={"value": r, "b": b}) for b in range(10) for r in range(10)]
+    glyphs += [Glyph(val_name(v), "val", meta={"value": v}) for v in VAL_VALUES]
+    glyphs += [Glyph(mc_name(d, c), "mc", meta={"value": d, "carry": c}) for c in range(10) for d in range(10)]
+    glyphs += [Glyph(f"res.{d}", "result", tuple(BITMAPS[str(d)]), width=ADVANCE, meta={"value": d}) for d in range(10)]
+    glyphs.append(Glyph("res.minus", "result", tuple(BITMAPS["-"]), width=ADVANCE, meta={"text": "-"}))
+    # The rest of printable ASCII. Without letters, macOS decides the font
+    # supports no language, and font pickers that filter by language hide it.
+    drawn = set(SYMBOLS.values()) | {str(d) for d in range(10)}
+    glyphs += [
+        Glyph(UV2AGL[ord(ch)], "text", tuple(BITMAPS[ch]), width=ADVANCE, char=ch, meta={"text": ch})
+        for ch in map(chr, range(0x21, 0x7F))
+        if ch not in drawn
+    ]
+    return glyphs
+
+
+@dataclass(frozen=True)
+class Pass:
+    name: str
+    title: str
+    direction: str
+    blurb: str
+    body: list[str]
+    distance: int | None = None
+
+
+def cls(names) -> str:
+    return "[" + " ".join(names) + "]"
+
+
+def rule(*parts: str) -> str:
+    return " ".join(p for p in parts if p)
+
+
+def features(n: int, m: int, names: list[str]) -> tuple[str, list[Pass]]:
+    """Feature code for sums and differences of up to `n` digits and products of up to `m` digits.
+
+    Addition and subtraction pad both operands to exactly n glyphs. After PAD and
+    SLOTS have run, the line always looks like this:
+
+        A[n-1] .. A[0]  op  B[n-1] .. B[0]  =  C  R[n-1] .. R[0]
+
+    so slot R[j] finds B[j] n+2 glyphs to its left and A[j] 2n+3 glyphs to its
+    left, whatever the operands' real lengths. That turns "fetch the matching
+    digit" into a fixed-length context, which one contextual lookup can express.
+
+    Multiplication pads both operands to 2m glyphs and makes 2m slots:
+
+        A[2m-1] .. A[0]  ×  B[2m-1] .. B[0]  =  R[2m-1] .. R[0]
+
+    Row j adds A[k-j] × B[j] into every slot R[k]. A[k-j] sits 4m+2-j glyphs to
+    the left of R[k] for every k. When k-j is out of range, that position holds
+    a pad or the operator, so it reads as zero. That is why both operands are
+    padded to twice their real width.
+    """
+    any_glyph = "@ANY"
+    wildcards = lambda count: " ".join([any_glyph] * count)
+    lookups: list[str] = ["lookup keep { sub @JOINED by @JOINED; } keep;"]
+
+    for k in range(1, min(max(n, 2 * m), PADS_PER_PASS + 1)):
+        rules = " ".join(f"sub {d} by {' '.join(['pad'] * k)} {d};" for d in DIGITS)
+        lookups.append(f"lookup pad{k} {{ {rules} }} pad{k};")
+    for op in ("add", "sub"):
+        lookups.append(f"lookup expand_{op} {{ sub equal by equal col.0 {' '.join([f'slot.{op}'] * n)}; }} expand_{op};")
+    lookups.append(f"lookup expand_mul {{ sub equal by equal {' '.join([mc_name(0, 0)] * (2 * m))}; }} expand_mul;")
+    for b in range(10):
+        lookups.append(f"lookup take_b{b} {{ sub slot.add by {b_name(b)}; sub slot.sub by {b_name(-b)}; }} take_b{b};")
+    for a in range(10):
+        rules = " ".join(f"sub {b_name(v)} by {col_name(v + a)};" for v in B_VALUES)
+        lookups.append(f"lookup add_a{a} {{ {rules} }} add_a{a};")
+    lookups.append(
+        "lookup sign_z { " + " ".join(f"sub {col_name(v)} by {sig_name(v, sign_of(v))};" for v in COL_VALUES) + " } sign_z;"
+    )
+    for s in ("p", "n"):
+        rules = " ".join(f"sub {col_name(v)} by {sig_name(v, s)};" for v in COL_VALUES)
+        lookups.append(f"lookup sign_{s} {{ {rules} }} sign_{s};")
+    every_mc = [mc_name(d, c) for c in range(10) for d in range(10)]
+    for b in range(10):
+        rules = " ".join(f"sub {mc_name(d, c)} by {accb_name(d, b)};" for c in range(10) for d in range(10))
+        lookups.append(f"lookup with_b{b} {{ {rules} }} with_b{b};")
+    for a in range(10):
+        rules = " ".join(f"sub {accb_name(r, b)} by {val_name(r + a * b)};" for b in range(10) for r in range(10))
+        lookups.append(f"lookup times_a{a} {{ {rules} }} times_a{a};")
+    every_dig = [dig_name(*state) for state in DIG_STATES]
+    negative_zeros = [dig_name(0, c, "n") for c in CARRIES if (0, c, "n") in DIG_STATES]
+    shown = every_dig + every_mc
+    lookups.append("lookup to_result { " + " ".join(f"sub {g} by res.{g[2] if g.startswith('mc') else g[1]};" for g in shown) + " } to_result;")
+    zeros = [g for g in every_dig if g[1] == "0"] + [mc_name(0, c) for c in range(10)]
+    lookups.append("lookup to_blank { " + " ".join(f"sub {g} by blank;" for g in zeros) + " } to_blank;")
+    lookups.append(
+        "lookup to_minus { " + " ".join(f"sub {g} by res.minus;" for g in negative_zeros) + " } to_minus;"
+    )
+
+    padded = lambda width: " ".join(["@PADDED"] * width)
+    digits = lambda count: " ".join(["@DIGIT"] * count)
+    # (operator class, padded width, longest operand that fits)
+    layouts = [("@ADDOP", n, n), ("@MULOP", 2 * m, m)]
+    pad_passes = []
+    longest_pad = max(width - 1 for _, width, _ in layouts)
+    for chunk in range(max(1, -(-longest_pad // PADS_PER_PASS))):
+        rules = ["ignore sub [@DIGIT @WORD period comma] @DIGIT';"] if chunk == 0 else []
+        already = " ".join(["pad"] * (chunk * PADS_PER_PASS))
+        for ops, width, longest in layouts:
+            for k in range(longest):
+                pads = min(width - 1 - k - chunk * PADS_PER_PASS, PADS_PER_PASS)
+                if pads <= 0:
+                    continue
+                rules.append(rule("sub", "" if chunk == 0 else "pad", f"@DIGIT' lookup pad{pads}", digits(k), f"{ops};"))
+                rules.append(rule("sub", ops, already, f"@DIGIT' lookup pad{pads}", digits(k), "equal;"))
+        pad_passes.append(rules)
+
+    mul_operand = " ".join(["pad"] * m + ["@PADDED"] * m)
+    slot_rules = [
+        "ignore sub equal' [@PADDED period comma];",
+        f"ignore sub [@DIGIT @WORD @OP equal period comma] {padded(n)} @ADDOP {padded(n)} equal';",
+        f"ignore sub [@DIGIT @WORD @OP equal period comma] {padded(2 * m)} @MULOP {padded(2 * m)} equal';",
+        f"sub {padded(n)} plus {padded(n)} equal' lookup expand_add;",
+        f"sub {padded(n)} [hyphen minus] {padded(n)} equal' lookup expand_sub;",
+        # An operand of up to m digits always starts with at least m pads. Requiring
+        # them rejects a 2m-digit operand, which would fill the block unpadded.
+        f"sub {mul_operand} @MULOP {mul_operand} equal' lookup expand_mul;",
+    ]
+
+    # Zero needs no context: anything that is not a nonzero digit at that
+    # distance is a pad, so a context-free fallback reads it as 0. Long
+    # contexts cost HarfBuzz shaping budget only when they match.
+    read_b = [f"sub @VAL{b} {wildcards(n + 1)} [slot.add slot.sub]' lookup take_b{b};" for b in range(1, 10)]
+    read_b.append("sub [slot.add slot.sub]' lookup take_b0;")
+    read_a = [f"sub @VAL{a} {wildcards(2 * n + 2)} @COLB' lookup add_a{a};" for a in range(1, 10)]
+    read_a.append("sub @COLB' lookup add_a0;")
+
+    sign_rules = [
+        "sub [equal @SIGZ] @COL' lookup sign_z;",
+        "sub @SIGP @COL' lookup sign_p;",
+        "sub @SIGN @COL' lookup sign_n;",
+    ]
+
+    every_sig = [sig_name(v, s) for v, s in SIG_STATES]
+    carry_rules = []
+    for s in ("p", "n"):
+        for c in CARRIES:
+            incoming = cls(dig_name(*state) for state in DIG_STATES if state[1:] == (c, s))
+            out = cls(dig_name(*settle(v, s, c)) for v, _ in SIG_STATES)
+            carry_rules.append(f"rsub @SIG' {incoming} by {out};")
+    out = cls(dig_name(*settle(v, "n" if own == "n" else "p", 0)) for v, own in SIG_STATES)
+    carry_rules.append(f"rsub @SIG' by {out};")
+
+    every_val = [val_name(v) for v in VAL_VALUES]
+    row_passes = []
+    for j in range(m):
+        broadcast = [rule("sub", f"@VAL{b}", wildcards(j), f"equal @MC' lookup with_b{b};") for b in range(10)]
+        broadcast += [f"sub {cls(accb_name(r, b) for r in range(10))} @MC' lookup with_b{b};" for b in range(10)]
+        multiply = [f"sub @VAL{a} {wildcards(4 * m + 1 - j)} @ACCB' lookup times_a{a};" for a in range(1, 10)]
+        multiply.append("sub @ACCB' lookup times_a0;")
+        normalize = [
+            f"rsub @VALS' {cls(mc_name(d, c) for d in range(10))} by {cls(mc_name((v + c) % 10, (v + c) // 10) for v in VAL_VALUES)};"
+            for c in range(1, 10)
+        ]
+        normalize.append(f"rsub @VALS' by {cls(mc_name(v % 10, v // 10) for v in VAL_VALUES)};")
+        row_passes += [
+            Pass(f"row{j}_b", f"row {j + 1}: spread B digit {j + 1}", "ltr",
+                 f"the first slot reads the digit {j + 2} glyphs to its left, digit {j + 1} of B counting from the right. every later slot copies it from its left neighbour.",
+                 broadcast, j + 2),
+            Pass(f"row{j}_mul", f"row {j + 1}: multiply", "ltr",
+                 f"every slot reads the digit {4 * m + 2 - j} glyphs to its left, the A digit that lines up with it for this row, and adds A digit × B digit to the digit it already holds. totals run from 0 to 90.",
+                 multiply, 4 * m + 2 - j),
+            Pass(f"row{j}_carry", f"row {j + 1}: carry", "rtl",
+                 "right to left, each slot adds the carry from its right neighbour, keeps the last digit, and hands the rest (0 to 9) to its left neighbour.",
+                 normalize),
+        ]
+
+    show_rules = [
+        f"sub equal {cls(negative_zeros)}' lookup to_minus;",
+        f"sub [equal blank res.minus] {cls(zeros)}' lookup to_blank [@DIG @MC];",
+        "sub [@DIG @MC]' lookup to_result;",
+    ]
+
+    # HarfBuzz marks a boundary unsafe to break only where a rule matched across
+    # it. Before the = is typed, nothing matches across the digits of B, so
+    # Chromium keeps the old shaping of the text before an edit and reshapes
+    # only the tail, which never sees the whole sum. Replacing each glyph with
+    # itself when it follows a digit or operator marks the whole run.
+    join_rules = ["sub [@DIGIT @OP] @JOINED' lookup keep;"]
+
+    passes = [
+        Pass("join", "hold the expression together", "ltr",
+             "every digit, operator, or = that follows a digit or operator is replaced by itself. nothing visible changes, but the match tells the engine this text has to be reshaped as one piece after an edit.",
+             join_rules),
+    ] + [
+        Pass("pad" if i == 0 else f"pad{i + 1}", "pad both operands", "ltr",
+             f"each operand's first digit looks ahead to count its own length, then a multiple substitution inserts zero-width zeros so every operand is exactly {n} glyphs long ({2 * m} for multiplication).",
+             rules)
+        for i, rules in enumerate(pad_passes)
+    ] + [
+        Pass("slots", "make room for the answer", "ltr",
+             f"an = that follows two padded operands becomes = plus a carry slot plus {n} blank answer slots ({2 * m} slots for multiplication).",
+             slot_rules),
+        Pass("read_b", "fetch the B digit", "ltr",
+             f"every answer slot grabs the digit exactly {n + 2} glyphs to its left, which is always the matching digit of B (negated for subtraction).",
+             read_b, n + 2),
+        Pass("read_a", "add the A digit", "ltr",
+             f"every slot grabs the digit {2 * n + 3} glyphs to its left, the matching digit of A, and adds it. now each slot holds a column total from -9 to 18.",
+             read_a, 2 * n + 3),
+        Pass("sign", "find the sign", "ltr",
+             "left to right, each slot copies the sign of the first nonzero column before it. the last slot ends up knowing whether the whole answer is negative.",
+             sign_rules),
+        Pass("carry", "ripple the carries", "rtl",
+             "a reverse chaining lookup walks right to left. each slot reads the carry its right neighbour just produced, settles into one digit, and passes its own carry left.",
+             carry_rules),
+        *row_passes,
+        Pass("show", "draw the answer", "ltr",
+             "leading zeros become zero-width blanks, a negative answer gets its minus sign, and every other slot becomes a visible digit.",
+             show_rules),
+    ]
+
+    classes = [
+        f"@ANY = {cls(names[1:])};",
+        f"@DIGIT = {cls(DIGITS)};",
+        "@PADDED = [@DIGIT pad];",
+        "@ADDOP = [plus hyphen minus];",
+        "@MULOP = [asterisk multiply];",
+        "@OP = [@ADDOP @MULOP];",
+        "@JOINED = [@DIGIT @OP equal];",
+        # A digit glued to a letter or underscore is part of a name like x2 or 0x1F, not a number.
+        f"@WORD = {cls([UV2AGL[c] for c in [*range(0x41, 0x5B), *range(0x61, 0x7B), 0x5F]])};",
+        *[f"@VAL{d} = [{DIGITS[d]}{' pad' if d == 0 else ''}];" for d in range(10)],
+        f"@COLB = {cls(b_name(v) for v in B_VALUES)};",
+        f"@COL = {cls(col_name(v) for v in COL_VALUES)};",
+        *[f"@SIG{s.upper()} = {cls(sig_name(v, own) for v, own in SIG_STATES if own == s)};" for s in SIGNS],
+        f"@SIG = {cls(every_sig)};",
+        f"@DIG = {cls(every_dig)};",
+        f"@MC = {cls(every_mc)};",
+        f"@ACCB = {cls(accb_name(r, b) for b in range(10) for r in range(10))};",
+        f"@VALS = {cls(every_val)};",
+    ]
+
+    fea = ["languagesystem DFLT dflt;", "languagesystem latn dflt;", "", *classes, ""]
+    fea += lookups
+    fea += ["", "feature calt {"]
+    for p in passes:
+        fea.append(f"  # {p.title}: {p.blurb}")
+        fea.append(f"  lookup {p.name.upper()} {{")
+        fea += [f"    {rule}" for rule in p.body]
+        fea.append(f"  }} {p.name.upper()};")
+    fea.append("} calt;")
+    return "\n".join(fea) + "\n", passes
+
+
+def draw(glyph: Glyph, x_offset: int = 0, pen: TTGlyphPen | None = None) -> TTGlyphPen:
+    """Draw each lit cell of the bitmap as a round dot, like an LED matrix."""
+    pen = pen or TTGlyphPen(None)
+    radius = glyph.dot / 2
+    # Eight off-curve points on an octagon around the dot. TrueType puts an
+    # on-curve point midway between each pair, which lands on the circle.
+    reach = radius / math.cos(math.pi / 8)
+    ring = [(math.cos(-math.pi / 8 - i * math.pi / 4), math.sin(-math.pi / 8 - i * math.pi / 4)) for i in range(8)]
+    for row, line in enumerate(glyph.bitmap):
+        for col, lit in enumerate(line):
+            if lit != "#":
+                continue
+            cx = x_offset + 50 + col * CELL + CELL / 2
+            cy = (6 - row) * CELL + CELL / 2
+            pen.qCurveTo(*[(round(cx + reach * dx), round(cy + reach * dy)) for dx, dy in ring], None)
+            pen.closePath()
+    return pen
+
+
+def assemble(family: str, glyphs: list[Glyph], drawings: dict, fea: str) -> TTFont:
+    fb = FontBuilder(UPM, isTTF=True)
+    fb.setupGlyphOrder([g.name for g in glyphs])
+    fb.setupCharacterMap({ord(g.char): g.name for g in glyphs if g.char})
+    fb.setupGlyf({g.name: drawings[g.name].glyph() for g in glyphs})
+    glyf = fb.font["glyf"]
+    fb.setupHorizontalMetrics({g.name: (g.width, getattr(glyf[g.name], "xMin", 0)) for g in glyphs})
+    fb.setupHorizontalHeader(ascent=900, descent=-250)
+    # macOS lists and picks fonts by PostScript name. Without one, CoreText
+    # invents a placeholder, Font Book fails validation, and apps can't use it.
+    ps_name = family.replace(" ", "") + "-Regular"
+    fb.setupNameTable({
+        "copyright": f"Copyright 2026 {AUTHOR}",
+        "familyName": family,
+        "styleName": "Regular",
+        "uniqueFontIdentifier": f"{VERSION};{ps_name}",
+        "fullName": f"{family} Regular",
+        "version": f"Version {VERSION}",
+        "psName": ps_name,
+        "designer": AUTHOR,
+        "licenseDescription": LICENSE,
+        "licenseInfoURL": "https://openfontlicense.org",
+    }, mac=False)
+    fb.setupOS2(sTypoAscender=900, sTypoDescender=-250, sTypoLineGap=0, usWinAscent=900, usWinDescent=250, fsType=0, fsSelection=0x40)
+    # Every glyph that a character maps to is 600 units wide; only glyphs that
+    # exist in the middle of shaping have zero width.
+    fb.setupPost(isFixedPitch=1)
+    fb.font["OS/2"].panose.bFamilyType = 2
+    fb.font["OS/2"].panose.bProportion = 9
+    addOpenTypeFeaturesFromString(fb.font, fea)
+    fb.font["OS/2"].recalcUnicodeRanges(fb.font)
+    fb.font["OS/2"].recalcCodePageRanges(fb.font)
+    # The outlines have no hinting, so ask for smoothing at every size.
+    fb.font["gasp"] = gasp = newTable("gasp")
+    gasp.version = 1
+    gasp.gaspRange = {0xFFFF: 0x000F}
+    # Smart dropout control, so thin dots don't vanish when rasterized small.
+    fb.font["prep"] = prep = newTable("prep")
+    prep.program = ttProgram.Program()
+    prep.program.fromAssembly(["PUSHW[]", "511", "SCANCTRL[]", "PUSHB[]", "4", "SCANTYPE[]"])
+    fb.font["head"].created = fb.font["head"].modified = BUILT
+    fb.font.recalcTimestamp = False
+    return fb.font
+
+
+def build_carry(n: int, m: int, debug: bool) -> tuple[TTFont, str, list[Pass], list[Glyph]]:
+    glyphs = inventory(debug)
+    fea, passes = features(n, m, [g.name for g in glyphs])
+    family = "Carry Debug" if debug else "Carry"
+    font = assemble(family, glyphs, {g.name: draw(g) for g in glyphs}, fea)
+    return font, fea, passes, glyphs
+
+
+def build_v0() -> TTFont:
+    """The baseline: one ligature per single-digit sum, 100 of them."""
+    glyphs = inventory(debug=False)[: 1 + len(DIGITS) + len(SYMBOLS)]
+    drawings = {g.name: draw(g) for g in glyphs}
+    rules = []
+    for a in range(10):
+        for b in range(10):
+            text = f"{a}+{b}={a + b}"
+            name = f"sum_{a}_{b}"
+            pen = TTGlyphPen(None)
+            for i, char in enumerate(text):
+                draw(Glyph(name, "text", tuple(BITMAPS[char])), x_offset=i * ADVANCE, pen=pen)
+            glyphs.append(Glyph(name, "ligature", width=len(text) * ADVANCE))
+            drawings[name] = pen
+            rules.append(f"  sub {DIGITS[a]} plus {DIGITS[b]} equal by {name};")
+    fea = "languagesystem DFLT dflt;\nlanguagesystem latn dflt;\nfeature liga {\n" + "\n".join(rules) + "\n} liga;\n"
+    return assemble("Carry v0", glyphs, drawings, fea)
+
+
+def stats(path: Path, n: int) -> dict:
+    font = TTFont(path)
+    gsub = font["GSUB"].table
+    calt = next(f for f in gsub.FeatureList.FeatureRecord if f.FeatureTag in ("calt", "liga"))
+    rules = 0
+    for lookup in gsub.LookupList.Lookup:
+        for sub in lookup.SubTable:
+            kind = lookup.LookupType
+            if kind == 7:
+                kind, sub = sub.ExtensionLookupType, sub.ExtSubTable
+            if kind == 8 or (kind == 6 and sub.Format == 3):
+                rules += 1
+            elif kind == 6 and sub.Format == 1:
+                rules += sum(len(rs.ChainSubRule) for rs in sub.ChainSubRuleSet if rs)
+            elif kind == 6:
+                rules += sum(len(cs.ChainSubClassRule) for cs in sub.ChainSubClassSet if cs)
+    return {
+        "maxDigits": n,
+        "glyphs": len(font.getGlyphOrder()),
+        "lookups": len(gsub.LookupList.Lookup),
+        "passes": len(calt.Feature.LookupListIndex),
+        "contextRules": rules,
+        "gsubBytes": len(font.getTableData("GSUB")),
+        "fileBytes": path.stat().st_size,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--digits", type=int, default=16, help="longest operand for + and -")
+    parser.add_argument("--mul-digits", type=int, default=8, help="longest operand for × and *")
+    parser.add_argument("--out", type=Path, default=Path("build"))
+    args = parser.parse_args()
+    args.out.mkdir(parents=True, exist_ok=True)
+
+    font, fea, passes, glyphs = build_carry(args.digits, args.mul_digits, debug=False)
+    (args.out / "carry.fea").write_text(fea)
+    font.save(args.out / "Carry.ttf")
+    font.flavor = "woff2"
+    font.save(args.out / "Carry.woff2")
+    font.flavor = None
+    debug_font, *_ = build_carry(args.digits, args.mul_digits, debug=True)
+    debug_font.save(args.out / "Carry-Debug.ttf")
+    build_v0().save(args.out / "Carry-v0.ttf")
+
+    calt = next(f for f in font["GSUB"].table.FeatureList.FeatureRecord if f.FeatureTag == "calt")
+    meta = {
+        "stats": {**stats(args.out / "Carry.ttf", args.digits), "maxMulDigits": args.mul_digits},
+        "passes": [
+            {"lookup": index, "name": p.name, "title": p.title, "direction": p.direction, "blurb": p.blurb, "distance": p.distance}
+            for index, p in zip(calt.Feature.LookupListIndex, passes)
+        ],
+        "glyphs": [{"name": g.name, "role": g.role, "width": g.width, **g.meta} for g in glyphs],
+    }
+    (args.out / "carry.json").write_text(json.dumps(meta, indent=1))
+    print(json.dumps(meta["stats"]))
+
+
+if __name__ == "__main__":
+    main()

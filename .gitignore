@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+build/
+probe/*.ttf
+tools/ctshape
+decisions.tsv
+node_modules/
+tools/tkshape
+tools/byname

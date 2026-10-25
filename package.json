@@ -1,0 +1,12 @@
+{
+  "name": "carry",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:browsers": "node tests/browser_test.mjs",
+    "test:typing": "node tests/typing_test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.58"
+  }
+}
