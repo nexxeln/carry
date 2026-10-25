@@ -33,7 +33,7 @@ GHOST_DOT = 36
 # inserts at most 63 pads (plus the digit itself) per pass. See JOURNAL.md.
 PADS_PER_PASS = 63
 
-VERSION = "1.000"
+VERSION = "1.100"
 AUTHOR = "Shoubhit Dash"
 LICENSE = "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org"
 
@@ -532,6 +532,7 @@ def assemble(family: str, glyphs: list[Glyph], drawings: dict, fea: str) -> TTFo
     prep.program = ttProgram.Program()
     prep.program.fromAssembly(["PUSHW[]", "511", "SCANCTRL[]", "PUSHB[]", "4", "SCANTYPE[]"])
     fb.font["head"].created = fb.font["head"].modified = BUILT
+    fb.font["head"].fontRevision = float(VERSION)
     fb.font.recalcTimestamp = False
     return fb.font
 

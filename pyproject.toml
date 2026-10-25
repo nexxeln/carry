@@ -1,6 +1,6 @@
 [project]
 name = "carry"
-version = "1.0.0"
+version = "1.1.0"
 description = "A font that does arithmetic with OpenType substitution rules"
 readme = "README.md"
 license = "MIT AND OFL-1.1"
